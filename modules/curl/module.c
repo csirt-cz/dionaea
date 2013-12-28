@@ -424,15 +424,17 @@ void session_upload_new(struct incident *i)
 	GString *gstemp;
 	char *url;
 
-	struct session *session = session_new();
+	struct session *session = NULL;
 
-	session->type = session_type_upload;
-			
 	if (incident_value_string_get(i, "_url", &gstemp) == false )
 	{
 		g_debug("dionaea.upload.request got no _url in incident!");
 		return;
 	}
+
+	session = session_new();
+	session->type = session_type_upload;
+
 	url = gstemp->str;
 
 	session->url = g_strdup(url);
