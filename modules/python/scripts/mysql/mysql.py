@@ -30,6 +30,7 @@ from dionaea.core import *
 from .include.packets import *
 import logging
 import sqlite3
+import re
 
 logger = logging.getLogger('mysqld')
 class mysqld(connection):
@@ -46,7 +47,7 @@ class mysqld(connection):
 		self._open_db('information_schema')
 
 	def _open_db(self, Database):
-		logger.warn("%s" % Database)
+		logger.warn("DATABASE opening %s" % Database)
 		try:
 			p = self.config[Database]['path']
 			logger.warn("open db %s -> %s" % (Database, p))
@@ -89,9 +90,9 @@ class mysqld(connection):
 
 	def _handle_COM_QUERY(self, p):
 		r = None
-		if p.Query.startswith(b"SET "):
+		if re.match(b'SET ', p.Query, re.I):
 			r = MySQL_Result_OK(Message="#2")
-		elif p.Query == b'select @@version_comment limit 1':
+		elif re.match(b'select @@version_comment limit 1$', p.Query, re.I) or re.match(b'select version\(\)$', p.Query, re.I):
 			r = [MySQL_Result_Header(FieldCount=1),
 
 				MySQL_Result_Field(Catalog='def',
@@ -106,7 +107,7 @@ class mysqld(connection):
 				MySQL_Result_Row_Data(ColumnValues=['Gentoo Linux mysql-5.0.54\0']),
 				MySQL_Result_EOF(ServerStatus=0x002)]
 
-		elif p.Query == b'SELECT DATABASE()':
+		elif p.Query == re.match(b'SELECT DATABASE\(\)$', p.Query, re.I):
 			r = [MySQL_Result_Header(FieldCount=1),
 
 				 MySQL_Result_Field(Catalog='def',
@@ -120,7 +121,7 @@ class mysqld(connection):
 
 				MySQL_Result_Row_Data(ColumnValues=[self.database]),
 				MySQL_Result_EOF(ServerStatus=0x002)]
-		elif p.Query == b'show databases':
+		elif p.Query == re.match(b'show databases$', p.Query, re.I):
 			r = [MySQL_Result_Header(FieldCount=1),
 
 				MySQL_Result_Field(Catalog='def',
@@ -138,7 +139,7 @@ class mysqld(connection):
 
 #			r.append(MySQL_Result_Row_Data(ColumnValues=['information_schema']))
 			r.append(MySQL_Result_EOF(ServerStatus=0x002))
-		elif p.Query == b'show tables':
+		elif p.Query == re.match(b'show tables$', p.Query, re.I):
 			r = [MySQL_Result_Header(FieldCount=1),
 
 				MySQL_Result_Field(Catalog='def',
@@ -191,6 +192,7 @@ class mysqld(connection):
 					r.append(MySQL_Result_EOF(ServerStatus=0x002))
 			except Exception as e:
 				logger.warn("SQL ERROR %s" % e)
+				logger.warn("SQL ERROR in %s" % p.Query)
 				r = MySQL_Result_Error(Message="Learn SQL!")
 		return r
 
