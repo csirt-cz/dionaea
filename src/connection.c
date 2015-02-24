@@ -3434,9 +3434,6 @@ ssize_t sendtofrom(int fd, void *buf, size_t len, int flags, struct sockaddr *to
 		errno = EINVAL;
 		return -1;
 	}
-	/* if your operating system lacks everything ... */
-	g_warning("Your operating system lacks SOL_IP(V6) / IP(V6)_PKTINFO");
-	return sendto(fd, buf, len, flags, to, tolen);
 }
 
 void connection_udp_io_in_cb(EV_P_ struct ev_io *w, int revents)
