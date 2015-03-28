@@ -115,10 +115,10 @@ class smbd(connection):
 			x.show()
 
 		r = self.process(p)
-		smblog.debug('packet: {0}'.format(p.summary()))
+		smblog.debug('packet: %s', p.summary())
 
 		if p.haslayer(Raw):
-			smblog.warning('p.haslayer(Raw): {0}'.format(p.getlayer(Raw).build()))
+			smblog.warning('p.haslayer(Raw): %s', p.getlayer(Raw).build())
 			p.show()
 
 #		i = incident("dionaea.module.python.smb.info")
@@ -132,7 +132,7 @@ class smbd(connection):
 			return len(data)
 
 		if r:
-			smblog.debug('response: {0}'.format(r.summary()))
+			smblog.debug('response: %s', r.summary())
 			r.show()
 
 #			i = incident("dionaea.module.python.smb.info")
@@ -151,7 +151,7 @@ class smbd(connection):
 				smblog.critical('process() returned None.')
 
 		if p.haslayer(Raw):
-			smblog.warning('p.haslayer(Raw): {0}'.format(p.getlayer(Raw).build()))
+			smblog.warning('p.haslayer(Raw): %s', p.getlayer(Raw).build())
 			p.show()
 			# some rest seems to be not parsed correctly
 			# could be start of some other packet, junk, or failed packet dissection
@@ -354,7 +354,7 @@ class smbd(connection):
 				i.con = self
 				i.url = "smb://%s/%s" % (self.remote.host, filename)
 				i.report()
-				smblog.info("OPEN FILE! %s" % filename)
+				smblog.info("OPEN FILE! %s", filename)
 
 			elif h.FileAttributes & SMB_FA_DIRECTORY:
 				pass
@@ -381,7 +381,7 @@ class smbd(connection):
 			i.con = self
 			i.url = "smb://%s/%s" % (self.remote.host, filename)
 			i.report()
-			smblog.info("OPEN FILE! %s" % filename)
+			smblog.info("OPEN FILE! %s", filename)
 
 		elif Command == SMB_COM_ECHO:
 			r = p.getlayer(SMB_Header).payload
@@ -400,7 +400,7 @@ class smbd(connection):
 					inpacket = DCERPC_Header(self.buf[:10])
 					smblog.info("got header")
 					inpacket = DCERPC_Header(self.buf)
-					smblog.info("FragLen %i len(self.buf) %i" % (inpacket.FragLen, len(self.buf)))
+					smblog.info("FragLen %i len(self.buf) %i", inpacket.FragLen, len(self.buf))
 					if inpacket.FragLen == len(self.buf):
 						outpacket = self.process_dcerpc_packet(self.buf)
 						if outpacket is not None:
@@ -427,7 +427,7 @@ class smbd(connection):
 			rdata = SMB_Data()
 			outbuf = self.outbuf
 			outbuflen = len(outbuf)
-			smblog.info("MaxCountLow %i len(outbuf) %i readcount %i" %(h.MaxCountLow, outbuflen, self.state['readcount']) )
+			smblog.info("MaxCountLow %i len(outbuf) %i readcount %i", h.MaxCountLow, outbuflen, self.state['readcount'] )
 			if h.MaxCountLow < outbuflen-self.state['readcount']:
 				rdata.ByteCount = h.MaxCountLow
 				newreadcount = self.state['readcount']+h.MaxCountLow
@@ -438,7 +438,7 @@ class smbd(connection):
 			rdata.Bytes = outbuf[ self.state['readcount'] : self.state['readcount'] + h.MaxCountLow ]
 			rdata.ByteCount = len(rdata.Bytes)+1
 			r.DataLenLow = len(rdata.Bytes)
-			smblog.info("readcount %i len(rdata.Bytes) %i" %(self.state['readcount'], len(rdata.Bytes)) )
+			smblog.info("readcount %i len(rdata.Bytes) %i", self.state['readcount'], len(rdata.Bytes) )
 			r /= rdata
 			
 			self.state['readcount'] = newreadcount
@@ -458,7 +458,9 @@ class smbd(connection):
 			if TransactionName[-1] == '\0':
 				TransactionName = TransactionName[:-1]
 
-#			print("'{}' == '{}' => {} {} {}".format(TransactionName, '\\PIPE\\',TransactionName == '\\PIPE\\', type(TransactionName) == type('\\PIPE\\'), len(TransactionName)) )
+#			print("'{}' == '{}' => {} {} {}".format(TransactionName, '\\PIPE\\',
+#				TransactionName == '\\PIPE\\', type(TransactionName) == type('\\PIPE\\'),
+#				len(TransactionName)) )
 
 
 			if TransactionName == '\\PIPE\\LANMAN':
@@ -583,15 +585,16 @@ class smbd(connection):
 				if str(transfersyntax_uuid) == '8a885d04-1ceb-11c9-9fe8-08002b104860':
 					if service_uuid.hex in registered_services:
 						service = registered_services[service_uuid.hex]
-						smblog.info('Found a registered UUID (%s). Accepting Bind for %s' % (service_uuid , service.__class__.__name__))
+						smblog.info('Found a registered UUID (%s). Accepting Bind for %s',
+									service_uuid , service.__class__.__name__)
 						self.state['uuid'] = service_uuid.hex
 						# Copy Transfer Syntax to CtxItem
 						ctxitem.AckResult = 0
 						ctxitem.AckReason = 0
 					else:
-						smblog.warn("Attempt to register %s failed, UUID does not exist or is not implemented" % service_uuid)
+						smblog.warn("Attempt to register %s failed, UUID does not exist or is not implemented", service_uuid)
 				else:
-					smblog.warn("Attempt to register %s failed, TransferSyntax %s is unknown" % (service_uuid, transfersyntax_uuid) )
+					smblog.warn("Attempt to register %s failed, TransferSyntax %s is unknown", service_uuid, transfersyntax_uuid)
 				i = incident("dionaea.modules.python.smb.dcerpc.bind")
 				i.con = self
 				i.uuid = str(service_uuid)
@@ -649,7 +652,7 @@ class epmapper(smbd):
 			smblog.warning("epmapper - not enough data")
 			return 0
 
-		smblog.debug('packet: {0}'.format(p.summary()))
+		smblog.debug('packet: %s', p.summary())
 
 		r = self.process_dcerpc_packet(p)
 
@@ -661,12 +664,12 @@ class epmapper(smbd):
 			smblog.critical('dcerpc processing failed. bailing out.')
 			return len(data)
 
-		smblog.debug('response: {0}'.format(r.summary()))
+		smblog.debug('response: %s', r.summary())
 		r.show()
 		self.send(r.build())
 
 		if p.haslayer(Raw):
-			smblog.warning('p.haslayer(Raw): {0}'.format(p.getlayer(Raw).build()))
+			smblog.warning('p.haslayer(Raw): %s', p.getlayer(Raw).build())
 			p.show()
 
 		return len(data)
