@@ -120,7 +120,8 @@ class NewDefaultValues(Packet_metaclass):
         return super(NewDefaultValues, cls).__new__(cls, name, bases, dct)
 
 
-class Packet(BasePacket, metaclass=Packet_metaclass):
+class Packet(BasePacket):
+    __metaclass__ = Packet_metaclass
     name=None
 
     fields_desc = []

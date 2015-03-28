@@ -218,7 +218,8 @@ class BERcodec_metaclass(type):
         return c
 
 
-class BERcodec_Object(metaclass=BERcodec_metaclass):
+class BERcodec_Object:
+    __metaclass__ = BERcodec_metaclass
     codec = ASN1_Codecs.BER
     tag = ASN1_Class_UNIVERSAL.ANY
 

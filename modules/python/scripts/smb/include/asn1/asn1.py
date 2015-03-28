@@ -96,7 +96,8 @@ class ASN1Codec(EnumElement):
 class ASN1_Codecs_metaclass(Enum_metaclass):
     element_class = ASN1Codec
 
-class ASN1_Codecs(metaclass=ASN1_Codecs_metaclass):
+class ASN1_Codecs:
+    __metaclass__ = ASN1_Codecs_metaclass
     BER = 1
     DER = 2
     PER = 3
@@ -158,7 +159,8 @@ class ASN1_Class_metaclass(Enum_metaclass):
         return cls
             
 
-class ASN1_Class(metaclass=ASN1_Class_metaclass):
+class ASN1_Class:
+    __metaclass__ = ASN1_Class_metaclass
     pass
 
 class ASN1_Class_UNIVERSAL(ASN1_Class):
@@ -211,7 +213,8 @@ class ASN1_Object_metaclass(type):
         return c
 
 
-class ASN1_Object(metaclass=ASN1_Object_metaclass):
+class ASN1_Object:
+    __metaclass__ = ASN1_Object_metaclass
     tag = ASN1_Class_UNIVERSAL.ANY
     def __init__(self, val):
         self.val = val
