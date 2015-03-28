@@ -26,7 +26,7 @@
 #*
 #*******************************************************************************/
 
-from dionaea.core import ihandler, incident, connection, g_dionaea
+from dionaea.core import incident, connection, g_dionaea
 
 import traceback
 import logging
