@@ -27,22 +27,10 @@
 #*******************************************************************************/
 
 import logging
-import os
-import imp
-
 from dionaea.core import g_dionaea
-
-# service imports
-import dionaea.tftp
-import dionaea.cmd
-import dionaea.emu
-import dionaea.store
-import dionaea.test
-import dionaea.ftp
 
 logger = logging.getLogger('ihandlers')
 logger.setLevel(logging.DEBUG)
-
 
 # reload service imports
 #imp.reload(dionaea.tftp)

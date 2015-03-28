@@ -25,7 +25,7 @@
 #*
 #*******************************************************************************/
 
-from dionaea.core import ihandler, incident, g_dionaea, connection
+from dionaea.core import ihandler, incident, connection
 from dionaea.util import sha512file
 
 import os
