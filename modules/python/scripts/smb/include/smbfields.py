@@ -328,7 +328,7 @@ SMB_CF_REQ_BATCH_OPLOCK = 0x04 # Request a batch oplock
 SMB_CF_TARGET_DIRECTORY = 0x08 # Target of open must be directory
 
 SMB_CreateFlags = {
-    SMB_CF_NONEi            :'NONE',
+    SMB_CF_NONE             :'NONE',
     SMB_CF_REQ_OPLOCK       :'REQ_OPLOCK',
     SMB_CF_REQ_BATCH_OPLOCK :'REQ_BATCH_OPLOCK',
     SMB_CF_TARGET_DIRECTORY :'TARGET_DIRECTORY',
