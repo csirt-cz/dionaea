@@ -19,10 +19,10 @@ import io
 import os
 from pyPgSQL import PgSQL
 
-from pyxmpp.all import JID, Iq, Message, StreamError
+from pyxmpp.all import JID
 from pyxmpp.jabber.client import JabberClient
 from pyxmpp.jabber.muc import MucRoomManager, MucRoomHandler
-from pyxmpp.xmlextra import replace_ns, common_doc, common_ns
+from pyxmpp.xmlextra import replace_ns, common_doc
 
 
 # PyXMPP uses `logging` module for its debug output
