@@ -197,7 +197,6 @@ class mysqld(connection):
 		return r
 
 	def handle_io_in(self,data):
-		_l = len(data)
 		offset = 0
 		while len(data) - offset >= 4:
 			h = MySQL_Packet_Header(data[offset:offset+4])
