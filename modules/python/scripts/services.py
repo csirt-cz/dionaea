@@ -51,8 +51,8 @@ logger = logging.getLogger('services')
 # global slave
 # keeps track of running services (daemons)
 # able to restart them
-g_slave
-addrs
+global g_slave
+global addrs
 
 class slave():
 	def __init__(self):

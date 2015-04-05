@@ -28,8 +28,8 @@
 from dionaea.core import ihandler, g_dionaea
 import logging
 
-handler
-logger
+global handler
+global logger
 
 class DionaeaLogHandler(logging.Handler):
 	def __init__(self):
