@@ -25,7 +25,7 @@
 #*
 #*******************************************************************************/
 
-from dionaea.core import ihandler, connection, g_dionaea
+from dionaea.core import ihandler, g_dionaea
 import logging
 
 global handler
