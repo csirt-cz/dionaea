@@ -42,7 +42,7 @@ logger.setLevel(logging.DEBUG)
 # global handler list
 # keeps a ref on our handlers
 # allows restarting
-global g_handlers
+g_handlers
 
 def start():
 	logger.warn("START THE IHANDLERS")
