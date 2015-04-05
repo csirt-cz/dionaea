@@ -1221,6 +1221,8 @@ __userinfo__ = {
 	}
 }
 
+# Used for SAMR handle_LookupNamesInDomain and handle_QueryInformationUser
+LookupName = ""
 		
 class samr(RPCService):
 	""" [MS-SAMR]: Security Account Manager (SAM) Remote Protocol Specification (Client-to-Server)
@@ -1232,9 +1234,6 @@ class samr(RPCService):
 	
 
 	uuid = UUID('12345778-1234-abcd-ef00-0123456789ac').hex
-
-	# Used for SAMR handle_LookupNamesInDomain and handle_QueryInformationUser
-	LookupName = ""
 
 	class SAMPR_HANDLE:
 		# 2.2.3.2 SAMPR_HANDLE
@@ -3801,7 +3800,3 @@ class WKSSVC(RPCService):
 	def handle_NetAddAlternateComputerName(cls, con, p):
 		# MS03-039
 		pass
-
-
-
-
