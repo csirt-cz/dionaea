@@ -329,10 +329,6 @@ class LongField(Field):
     def __init__(self, name, default):
         Field.__init__(self, name, default, "Q")
 
-class LELongField(Field):
-    def __init__(self, name, default):
-        Field.__init__(self, name, default, "<Q")
-
 class XLongField(LongField):
     def i2repr(self, pkt, x):
         if x is None:
