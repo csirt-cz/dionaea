@@ -82,7 +82,7 @@ class RPCService:
 				try:
 					data = method(con, p)
 				except DCERPCValueError as e:
-					rpclog.warn("DCERPCValueError %s" % e)
+					rpclog.debug("DCERPCValueError %s" % e)
 					return None
 
 				if data is None:
