@@ -180,7 +180,7 @@ class URI(object):
 			if not m:
 				try:
 					data = bytes(data, "utf-8")
-					logger.info("Can't parse the URI: {}", data)
+					logger.info("Can't parse the URI: %s" % format(data))
 				except:
 					logger.info("Can't parse or convert the URI.")
 
