@@ -129,7 +129,8 @@ class Authentication(object):
             if n in cls._quote:
                 ret[n] = unquote(v)
             if n in cls._noquote:
-                # this values shouldn't be quoted, but nevertheless some clients do it
+                # this values shouldn't be quoted, but nevertheless some
+                # clients do it
                 ret[n] = unquote(v)
 
         return (l, ret)
@@ -142,8 +143,8 @@ KD = lambda secret, data: H(secret + b":" + data)
 def create_digest(algorithm = None, cnonce = None, method = None, nonce = None, password = None, realm = None, uri = None, username = None):
     """
     >>> print(create_digest(algorithm = "md5", method = "REGISTER",
-		nonce = "foobar", password = "secret", realm = "sip-server",
-		uri = "sip:sip-server", username = "alice"))
+                nonce = "foobar", password = "secret", realm = "sip-server",
+                uri = "sip:sip-server", username = "alice"))
     b'8b30552864468e5e6ab1eb2b87d1b92f'
     """
     if type(algorithm) == str:
@@ -165,7 +166,8 @@ def create_digest(algorithm = None, cnonce = None, method = None, nonce = None, 
 
     # :See: http://tools.ietf.org/html/rfc2617#page-13
     if algorithm and algorithm.lower() == 'md5-sess':
-        A1 = H(username + b":" + realm + b":" + password) + b":" + nonce + b":" + cnonce
+        A1 = H(username + b":" + realm + b":" + password) + \
+            b":" + nonce + b":" + cnonce
     else:
         A1 = username + b":" + realm + b":" + password
 
