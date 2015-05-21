@@ -708,6 +708,8 @@ class logsqlhandler(ihandler):
 
     def handle_incident_dionaea_module_emu_profile(self, icd):
         con = icd.con
+        if con not in self.attacks:
+            return
         attackid = self.attacks[con][1]
         logger.info("emu profile for attackid %i" % attackid)
         self.cursor.execute("INSERT INTO emu_profiles (connection, emu_profile_json) VALUES (?,?)",
@@ -717,6 +719,8 @@ class logsqlhandler(ihandler):
 
     def handle_incident_dionaea_download_offer(self, icd):
         con=icd.con
+        if con not in self.attacks:
+            return
         attackid = self.attacks[con][1]
         logger.info("offer for attackid %i" % attackid)
         self.cursor.execute("INSERT INTO offers (connection, offer_url) VALUES (?,?)",
@@ -725,6 +729,8 @@ class logsqlhandler(ihandler):
 
     def handle_incident_dionaea_download_complete_hash(self, icd):
         con=icd.con
+        if con not in self.attacks:
+            return
         attackid = self.attacks[con][1]
         logger.info("complete for attackid %i" % attackid)
         self.cursor.execute("INSERT INTO downloads (connection, download_url, download_md5_hash) VALUES (?,?,?)",
@@ -734,6 +740,8 @@ class logsqlhandler(ihandler):
 
     def handle_incident_dionaea_service_shell_listen(self, icd):
         con=icd.con
+        if con not in self.attacks:
+            return
         attackid = self.attacks[con][1]
         logger.info("listen shell for attackid %i" % attackid)
         self.cursor.execute("INSERT INTO emu_services (connection, emu_service_url) VALUES (?,?)",
@@ -742,6 +750,8 @@ class logsqlhandler(ihandler):
 
     def handle_incident_dionaea_service_shell_connect(self, icd):
         con=icd.con
+        if con not in self.attacks:
+            return
         attackid = self.attacks[con][1]
         logger.info("connect shell for attackid %i" % attackid)
         self.cursor.execute("INSERT INTO emu_services (connection, emu_service_url) VALUES (?,?)",
