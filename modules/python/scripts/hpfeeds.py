@@ -286,7 +286,7 @@ class hpfeedihandler(ihandler):
             sha512 = sha512file(i.file)
             self.client.publish(CAPTURECHAN, time=tstamp,
                                 saddr=i.con.remote.host,
-                                sport=str(i.con.remote.port), daddr=self._ownip(i),
+                                sport=str(i.con.remote.port), daddr='1',
                                 dport=str(i.con.local.port), md5=i.md5hash, sha512=sha512,
                                 url=i.url
                                 )
@@ -301,7 +301,7 @@ class hpfeedihandler(ihandler):
             self.client.publish(DCECHAN, uuid=i.uuid, opnum=i.opnum,
                                 saddr=i.con.remote.host, sport=str(
                                     i.con.remote.port),
-                                daddr=self._ownip(i), dport=str(i.con.local.port),
+                                daddr='1', dport=str(i.con.local.port),
                                 )
         except Exception as e:
             logger.warn('exception when publishing: {0}'.format(e))
