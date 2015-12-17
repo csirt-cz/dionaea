@@ -30,7 +30,6 @@ from dionaea.core import ihandler, g_dionaea
 
 import logging
 import json
-import sqlite3
 import time
 
 logger = logging.getLogger('logsql')
@@ -41,16 +40,11 @@ class logsqlhandler(ihandler):
         logger.debug("%s ready!" % (self.__class__.__name__))
         self.path = path
 
-    def start(self):
-        ihandler.__init__(self, self.path)
-        # mapping socket -> attackid
-        self.attacks = {}
-
-        self.pending = {}
+    def sqlite_init(self): 
+        import sqlite3
 
 #       self.dbh = sqlite3.connect(user = g_dionaea.config()['modules']['python']['logsql']['file'])
-        file = g_dionaea.config()['modules']['python'][
-            'logsql']['sqlite']['file']
+        file = g_dionaea.config()['modules']['python']['logsql']['sqlite']['file']
         self.dbh = sqlite3.connect(file)
         self.cursor = self.dbh.cursor()
         update = False
@@ -560,8 +554,531 @@ class logsqlhandler(ihandler):
             logger.debug("... not required")
 
 
+    def postgresql_init(self): 
+        import psycopg2
+
+        cfg_database = g_dionaea.config()['modules']['python']['logsql']['postgresql_psycopg2']['database']
+        cfg_user = g_dionaea.config()['modules']['python']['logsql']['postgresql_psycopg2']['user']
+        cfg_password = g_dionaea.config()['modules']['python']['logsql']['postgresql_psycopg2']['password']
+        cfg_host = g_dionaea.config()['modules']['python']['logsql']['postgresql_psycopg2']['host']
+        cfg_port = g_dionaea.config()['modules']['python']['logsql']['postgresql_psycopg2']['port']
+
+        try:
+            self.dbh  = psycopg2.connect(database=cfg_database, user=cfg_user, password=cfg_password, host=cfg_host, port=cfg_port)
+        except:
+            print("I am unable to connect to the database")
+
+        self.cursor = self.dbh.cursor()
+        update = False
+
+        def index_exists(index_name):
+            self.cursor.execute("""SELECT 1
+                                    FROM   pg_class c
+                                    JOIN   pg_namespace n ON n.oid = c.relnamespace
+                                    WHERE  c.relname = '%s'
+                                    AND    n.nspname = 'public'""" % index_name)
+            exists = self.cursor.rowcount
+
+            if exists > 0:
+                return True
+            else:
+                return False
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            connections (
+                connection INTEGER SERIAL KEY,
+                connection_type TEXT,
+                connection_transport TEXT,
+                connection_protocol TEXT,
+                connection_timestamp INTEGER,
+                connection_root INTEGER,
+                connection_parent INTEGER,
+                local_host TEXT,
+                local_port INTEGER,
+                remote_host TEXT,
+                remote_hostname TEXT,
+                remote_port INTEGER
+            )""")
+
+        self.cursor.execute("""DROP TRIGGER IF EXISTS connections_INSERT_update_connection_root_trg ON connections""")
+        self.cursor.execute("""DROP FUNCTION IF EXISTS connections_INSERT_update_connection_root_fnc()""")
+
+        self.cursor.execute("""CREATE FUNCTION connections_INSERT_update_connection_root_fnc() RETURNS trigger AS $connections_INSERT_update_connection_root_fnc$
+            BEGIN
+                UPDATE connections SET connection_root = connection WHERE connection = NEW.connection AND NEW.connection_root IS NULL;
+                RETURN NEW;
+            END;
+            $connections_INSERT_update_connection_root_fnc$ LANGUAGE plpgsql;""")
+
+
+        self.cursor.execute("""CREATE TRIGGER    connections_INSERT_update_connection_root_trg
+            AFTER INSERT ON connections 
+            FOR EACH ROW
+            WHEN (NEW.connection_root IS NULL)
+                EXECUTE PROCEDURE connections_INSERT_update_connection_root_fnc();""")
+
+
+        for idx in ["type","timestamp","root","parent"]:
+            if not index_exists("connections_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX connections_%s_idx
+            ON connections (connection_%s)""" % (idx, idx))
+
+        for idx in ["local_host","local_port","remote_host"]:
+            if not index_exists("connections_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX connections_%s_idx
+            ON connections (%s)""" % (idx, idx))
+
+
+#         self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+#            bistreams (
+#                bistream INTEGER PRIMARY KEY,
+#                connection INTEGER,
+#                bistream_data TEXT
+#            )""")
+#
+#        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+#            smbs (
+#                smb INTEGER PRIMARY KEY,
+#                connection INTEGER,
+#                smb_direction TEXT,
+#                smb_action TEXT,
+#                CONSTRAINT smb_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+#            )""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            dcerpcbinds (
+                dcerpcbind SERIAL PRIMARY KEY,
+                connection INTEGER,
+                dcerpcbind_uuid TEXT,
+                dcerpcbind_transfersyntax TEXT
+                -- CONSTRAINT dcerpcs_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        for idx in ["uuid","transfersyntax"]:
+            if not index_exists("dcerpcbinds_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX dcerpcbinds_%s_idx 
+            ON dcerpcbinds (dcerpcbind_%s)""" % (idx, idx))
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            dcerpcrequests (
+                dcerpcrequest SERIAL PRIMARY KEY,
+                connection INTEGER,
+                dcerpcrequest_uuid TEXT,
+                dcerpcrequest_opnum INTEGER
+                -- CONSTRAINT dcerpcs_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        for idx in ["uuid","opnum"]:
+            if not index_exists("dcerpcrequests_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX dcerpcrequests_%s_idx 
+            ON dcerpcrequests (dcerpcrequest_%s)""" % (idx, idx))
+
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            dcerpcservices (
+                dcerpcservice SERIAL PRIMARY KEY,
+                dcerpcservice_uuid TEXT,
+                dcerpcservice_name TEXT,
+                CONSTRAINT dcerpcservice_uuid_uniq UNIQUE (dcerpcservice_uuid)
+            )""")
+
+        from uuid import UUID
+        from dionaea.smb import rpcservices
+        import inspect
+        services = inspect.getmembers(rpcservices, inspect.isclass)
+        for name, servicecls in services:
+            if not name == 'RPCService' and issubclass(servicecls, rpcservices.RPCService):
+                try:
+                    self.cursor.execute("INSERT INTO dcerpcservices (dcerpcservice_name, dcerpcservice_uuid) VALUES (%s,%s)",
+                        (name, str(UUID(hex=servicecls.uuid))) )
+                except Exception as e:
+#                    print("dcerpcservice %s existed %s " % (servicecls.uuid, e) )
+                    pass
+
+        self.dbh.commit()
+
+        logger.info("Getting RPC Services")
+        self.cursor.execute("SELECT * FROM dcerpcservices")
+#        print(r)
+        names = [self.cursor.description[x][0] for x in range(len(self.cursor.description))]
+        r = [ dict(zip(names, i)) for i in self.cursor]
+#        print(r)
+        r = dict([(UUID(i['dcerpcservice_uuid']).hex,i['dcerpcservice']) for i in r])
+#        print(r)
+
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            dcerpcserviceops (
+                dcerpcserviceop SERIAL PRIMARY KEY,
+                dcerpcservice INTEGER,
+                dcerpcserviceop_opnum INTEGER,
+                dcerpcserviceop_name TEXT,
+                dcerpcserviceop_vuln TEXT,
+                CONSTRAINT dcerpcop_service_opnum_uniq UNIQUE (dcerpcservice, dcerpcserviceop_opnum)
+            )""")
+
+        logger.info("Setting RPC ServiceOps")
+        for name, servicecls in services:
+            if not name == 'RPCService' and issubclass(servicecls, rpcservices.RPCService):
+                for opnum in servicecls.ops:
+                    op = servicecls.ops[opnum]
+                    uuid = servicecls.uuid
+                    vuln = ''
+                    dcerpcservice = r[uuid]
+                    if opnum in servicecls.vulns:
+                        vuln = servicecls.vulns[opnum]
+                    try:
+                        self.cursor.execute("INSERT INTO dcerpcserviceops (dcerpcservice, dcerpcserviceop_opnum, dcerpcserviceop_name, dcerpcserviceop_vuln) VALUES (%s,%s,%s,%s)", 
+                            (dcerpcservice, opnum, op, vuln))
+                    except:
+#                        print("%s %s %s %s %s existed" % (dcerpcservice, uuid, name, op, vuln))
+                        pass
+
+        self.dbh.commit()
+
+        # NetPathCompare was called NetCompare in dcerpcserviceops
+        try:
+            logger.debug("Trying to update table: dcerpcserviceops")
+            self.cursor.execute("""SELECT * FROM dcerpcserviceops WHERE dcerpcserviceop_name = 'NetCompare'""")
+            x = self.cursor.fetchall()
+            if len(x) > 0:
+                self.cursor.execute("""UPDATE dcerpcserviceops SET dcerpcserviceop_name = 'NetPathCompare' WHERE dcerpcserviceop_name = 'NetCompare'""")
+                logger.debug("... done")
+            else:
+                logger.info("... not required")
+        except Exception as e:
+            print(e)
+            logger.info("... not required")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            emu_profiles (
+                emu_profile SERIAL PRIMARY KEY,
+                connection INTEGER,
+                emu_profile_json TEXT
+                -- CONSTRAINT emu_profiles_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        self.dbh.commit()
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            emu_services (
+                emu_serivce SERIAL PRIMARY KEY,
+                connection INTEGER,
+                emu_service_url TEXT
+                -- CONSTRAINT emu_services_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            offers (
+                offer SERIAL PRIMARY KEY,
+                connection INTEGER,
+                offer_url TEXT
+                -- CONSTRAINT offers_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        if not index_exists("offers_url_idx"):
+            self.cursor.execute("""CREATE INDEX offers_url_idx ON offers (offer_url)""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            downloads (
+                download SERIAL PRIMARY KEY,
+                connection INTEGER,
+                download_url TEXT,
+                download_md5_hash TEXT
+                -- CONSTRAINT downloads_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        for idx in ["url", "md5_hash"]:
+            if not index_exists("downloads_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX downloads_%s_idx 
+            ON downloads (download_%s)""" % (idx, idx))
+
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            resolves (
+                resolve SERIAL PRIMARY KEY,
+                connection INTEGER,
+                resolve_hostname TEXT,
+                resolve_type TEXT,
+                resolve_result TEXT
+            )""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS 
+            p0fs (
+                p0f SERIAL PRIMARY KEY,
+                connection INTEGER,
+                p0f_genre TEXT,
+                p0f_link TEXT,
+                p0f_detail TEXT,
+                p0f_uptime INTEGER,
+                p0f_tos TEXT,
+                p0f_dist INTEGER,
+                p0f_nat INTEGER,
+                p0f_fw INTEGER
+                -- CONSTRAINT p0fs_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        for idx in ["genre","detail","uptime"]:
+            if not index_exists("p0fs_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX p0fs_%s_idx 
+            ON p0fs (p0f_%s)""" % (idx, idx))
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            logins (
+                login SERIAL PRIMARY KEY,
+                connection INTEGER,
+                login_username TEXT,
+                login_password TEXT
+                -- CONSTRAINT logins_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        for idx in ["username","password"]:
+            if not index_exists("logins_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX logins_%s_idx 
+            ON logins (login_%s)""" % (idx, idx))
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            mssql_fingerprints (
+                mssql_fingerprint SERIAL PRIMARY KEY,
+                connection INTEGER,
+                mssql_fingerprint_hostname TEXT,
+                mssql_fingerprint_appname TEXT,
+                mssql_fingerprint_cltintname TEXT
+                -- CONSTRAINT mssql_fingerprints_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        for idx in ["hostname","appname","cltintname"]:
+            if not index_exists("mssql_fingerprints_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX mssql_fingerprints_%s_idx 
+            ON mssql_fingerprints (mssql_fingerprint_%s)""" % (idx, idx))
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            mssql_commands (
+                mssql_command SERIAL PRIMARY KEY,
+                connection INTEGER,
+                mssql_command_status TEXT,
+                mssql_command_cmd TEXT
+                -- CONSTRAINT mssql_commands_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        for idx in ["status"]:
+            if not index_exists("mssql_commands_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX mssql_commands_%s_idx 
+            ON mssql_commands (mssql_command_%s)""" % (idx, idx))
+
+
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS virustotals (
+                virustotal SERIAL PRIMARY KEY,
+                virustotal_md5_hash TEXT NOT NULL,
+                virustotal_timestamp INTEGER NOT NULL,
+                virustotal_permalink TEXT NOT NULL
+            )""")
+
+        for idx in ["md5_hash"]:
+            if not index_exists("virustotals_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX virustotals_%s_idx 
+            ON virustotals (virustotal_%s)""" % (idx, idx))
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS virustotalscans (
+            virustotalscan SERIAL PRIMARY KEY,
+            virustotal INTEGER NOT NULL,
+            virustotalscan_scanner TEXT NOT NULL,
+            virustotalscan_result TEXT
+        )""")
+
+
+        for idx in ["scanner","result"]:
+            if not index_exists("virustotalscans_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX virustotalscans_%s_idx 
+            ON virustotalscans (virustotalscan_%s)""" % (idx, idx))
+
+        if not index_exists("virustotalscans_virustotal_idx"):
+            self.cursor.execute("""CREATE INDEX virustotalscans_virustotal_idx 
+            ON virustotalscans (virustotal)""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            mysql_commands (
+                mysql_command SERIAL PRIMARY KEY,
+                connection INTEGER,
+                mysql_command_cmd NUMERIC NOT NULL
+                -- CONSTRAINT mysql_commands_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            mysql_command_args (
+                mysql_command_arg SERIAL PRIMARY KEY,
+                mysql_command INTEGER,
+                mysql_command_arg_index NUMERIC NOT NULL,
+                mysql_command_arg_data TEXT NOT NULL
+                -- CONSTRAINT mysql_commands_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+            )""")
+
+        for idx in ["command"]:
+            if not index_exists("mysql_command_args_%s_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX mysql_command_args_%s_idx 
+            ON mysql_command_args (mysql_%s)""" % (idx, idx))
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            mysql_command_ops (
+                mysql_command_op SERIAL PRIMARY KEY,
+                mysql_command_cmd INTEGER NOT NULL,
+                mysql_command_op_name TEXT NOT NULL,
+                CONSTRAINT mysql_command_cmd_uniq UNIQUE (mysql_command_cmd)
+            )""")
+
+        self.dbh.commit()
+
+        from dionaea.mysql.include.packets import MySQL_Commands
+        logger.info("Setting MySQL Command Ops")
+        for num,name in MySQL_Commands.items():
+            try:
+                self.cursor.execute("INSERT INTO mysql_command_ops (mysql_command_cmd, mysql_command_op_name) VALUES (%s,%s)",
+                            (num, name))
+            except:
+                pass
+
+        self.dbh.commit()
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            sip_commands (
+                sip_command SERIAL PRIMARY KEY,
+                connection INTEGER,
+                sip_command_method TEXT,
+                sip_command_call_id TEXT,
+                sip_command_user_agent TEXT,
+                sip_command_allow INTEGER
+            -- CONSTRAINT sip_commands_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+        )""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            sip_addrs (
+                sip_addr SERIAL PRIMARY KEY,
+                sip_command INTEGER,
+                sip_addr_type TEXT,
+                sip_addr_display_name TEXT,
+                sip_addr_uri_scheme TEXT,
+                sip_addr_uri_user TEXT,
+                sip_addr_uri_password TEXT,
+                sip_addr_uri_host TEXT,
+                sip_addr_uri_port TEXT
+                -- CONSTRAINT sip_addrs_command_fkey FOREIGN KEY (sip_command) REFERENCES sip_commands (sip_command)
+            )""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            sip_vias (
+                sip_via SERIAL PRIMARY KEY,
+                sip_command INTEGER,
+                sip_via_protocol TEXT,
+                sip_via_address TEXT,
+                sip_via_port TEXT
+                -- CONSTRAINT sip_vias_command_fkey FOREIGN KEY (sip_command) REFERENCES sip_commands (sip_command)
+            )""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            sip_sdp_origins (
+                sip_sdp_origin SERIAL PRIMARY KEY,
+                sip_command INTEGER,
+                sip_sdp_origin_username TEXT,
+                sip_sdp_origin_sess_id TEXT,
+                sip_sdp_origin_sess_version TEXT,
+                sip_sdp_origin_nettype TEXT,
+                sip_sdp_origin_addrtype TEXT,
+                sip_sdp_origin_unicast_address TEXT
+                -- CONSTRAINT sip_sdp_origins_fkey FOREIGN KEY (sip_command) REFERENCES sip_commands (sip_command)
+            )""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            sip_sdp_connectiondatas (
+                sip_sdp_connectiondata SERIAL PRIMARY KEY,
+                sip_command INTEGER,
+                sip_sdp_connectiondata_nettype TEXT,
+                sip_sdp_connectiondata_addrtype TEXT,
+                sip_sdp_connectiondata_connection_address TEXT,
+                sip_sdp_connectiondata_ttl TEXT,
+                sip_sdp_connectiondata_number_of_addresses TEXT 
+                -- CONSTRAINT sip_sdp_connectiondatas_fkey FOREIGN KEY (sip_command) REFERENCES sip_commands (sip_command)
+            )""")
+
+        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+            sip_sdp_medias (
+                sip_sdp_media SERIAL PRIMARY KEY,
+                sip_command INTEGER,
+                sip_sdp_media_media TEXT,
+                sip_sdp_media_port TEXT,
+                sip_sdp_media_number_of_ports TEXT,
+                sip_sdp_media_proto TEXT
+--                sip_sdp_media_fmt,
+--                sip_sdp_media_attributes
+                -- CONSTRAINT sip_sdp_medias_fkey FOREIGN KEY (sip_command) REFERENCES sip_commands (sip_command)
+            )""")
+
+#        self.cursor.execute("""CREATE TABLE IF NOT EXISTS
+#            httpheaders (
+#                httpheader INTEGER PRIMARY KEY,
+#                connection INTEGER,
+#                http_headerkey TEXT,
+#                http_headervalue TEXT,
+#                -- CONSTRAINT httpheaders_connection_fkey FOREIGN KEY (connection) REFERENCES connections (connection)
+#            )""")
+#
+#        for idx in ["headerkey","headervalue"]:
+#            self.cursor.execute("""CREATE INDEX IF NOT EXISTS httpheaders_%s_idx
+#            ON httpheaders (httpheader_%s)""" % (idx, idx))
+
+
+        # connection index for all 
+        for idx in ["dcerpcbinds", "dcerpcrequests", "emu_profiles", "emu_services", "offers", "downloads", "p0fs", "logins", "mssql_fingerprints", "mssql_commands","mysql_commands","sip_commands"]:
+            if not index_exists("%s_connection_idx" % (idx)):
+                self.cursor.execute("""CREATE INDEX %s_connection_idx    ON %s (connection)""" % (idx, idx))
+
+
+        self.dbh.commit()
+
+
+        # updates, database schema corrections for old versions
+
+        # svn rev 2143 removed the table dcerpcs
+        # and created the table dcerpcrequests
+        #
+        # copy the data to the new table dcerpcrequests
+        # drop the old table
+        try:
+            logger.debug("Updating Table dcerpcs")
+            self.cursor.execute("""INSERT INTO
+                                    dcerpcrequests (connection, dcerpcrequest_uuid, dcerpcrequest_opnum)
+                                SELECT
+                                    connection, dcerpc_uuid, dcerpc_opnum
+                                FROM
+                                    dcerpcs""")
+            self.cursor.execute("""DROP TABLE dcerpcs""")
+            logger.debug("... done")
+        except Exception as e:
+            #            print(e)
+            logger.debug("... not required")
+
+
+    def start(self):
+        ihandler.__init__(self, self.path)
+        # mapping socket -> attackid
+        self.attacks = {}
+
+        self.pending = {}
+
+        self.log_mode = g_dionaea.config()['modules']['python']['logsql']['mode']
+
+        if self.log_mode == 'sqlite':
+            self.sqlite_init()
+        elif self.log_mode == 'postgresql_psycopg2':
+            self.postgresql_init()
+
+
     def __del__(self):
-        logger.info("Closing sqlite handle")
+        logger.info("Closing %s handle" % (self.log_mode))
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
         self.cursor.close()
         self.cursor = None
         self.dbh.close()
@@ -572,9 +1089,21 @@ class logsqlhandler(ihandler):
         pass
 
     def connection_insert(self, icd, connection_type):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con=icd.con
-        r = self.cursor.execute("INSERT INTO connections (connection_timestamp, connection_type, connection_transport, connection_protocol, local_host, local_port, remote_host, remote_hostname, remote_port) VALUES (?,?,?,?,?,?,?,?,?)",
-                                (time.time(), connection_type, con.transport, con.protocol, con.local.host, con.local.port, con.remote.host, con.remote.hostname, con.remote.port) )
+        if self.log_mode == 'sqlite':
+            r = self.cursor.execute("INSERT INTO connections (connection_timestamp, connection_type, connection_transport, connection_protocol, local_host, local_port, remote_host, remote_hostname, remote_port) VALUES (?,?,?,?,?,?,?,?,?)",
+                                    (time.time(), connection_type, con.transport, con.protocol, con.local.host, con.local.port, con.remote.host, con.remote.hostname, con.remote.port) )
+        elif self.log_mode == 'postgresql_psycopg2':
+            try:
+                r = self.cursor.execute("INSERT INTO connections (connection_timestamp, connection_type, connection_transport, connection_protocol, local_host, local_port, remote_host, remote_hostname, remote_port) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                                    (time.time(), connection_type, con.transport, con.protocol, con.local.host, con.local.port, con.remote.host, con.remote.hostname, con.remote.port) )
+            except Exception as e:
+                print(e)
         attackid = self.cursor.lastrowid
         self.attacks[con] = (attackid, attackid)
         self.dbh.commit()
@@ -587,10 +1116,19 @@ class logsqlhandler(ihandler):
             # - update the connection_root for all connections which had the 'childid' as connection_root
             for i in self.pending[con]:
                 print("%s %s %s" % (attackid, attackid, i))
-                self.cursor.execute("UPDATE connections SET connection_root = ?, connection_parent = ? WHERE connection = ?",
-                                    (attackid, attackid, i ) )
-                self.cursor.execute("UPDATE connections SET connection_root = ? WHERE connection_root = ?",
+                if self.log_mode == 'sqlite':
+                    self.cursor.execute("UPDATE connections SET connection_root = ?, connection_parent = ? WHERE connection = ?",
+                                        (attackid, attackid, i ) )
+                    self.cursor.execute("UPDATE connections SET connection_root = ? WHERE connection_root = ?",
                                     (attackid, i ) )
+                elif self.log_mode == 'postgresql_psycopg2':
+                    try:
+                        self.cursor.execute("UPDATE connections SET connection_root = %s, connection_parent = %s WHERE connection = %s",
+                                            (attackid, attackid, i ) )
+                        self.cursor.execute("UPDATE connections SET connection_root = %s WHERE connection_root = %s",
+                                            (attackid, i ) )
+                    except Exception as e:
+                        print(e)
             self.dbh.commit()
 
         return attackid
@@ -663,6 +1201,11 @@ class logsqlhandler(ihandler):
                     self.pending[icd.parent][self.attacks[icd.child][1]] = True
 
     def handle_incident_dionaea_connection_link(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         if icd.parent in self.attacks:
             logger.info("parent ids %s" % str(self.attacks[icd.parent]))
             parentroot, parentid = self.attacks[icd.parent]
@@ -673,10 +1216,16 @@ class logsqlhandler(ihandler):
                 childid = parentid
             self.attacks[icd.child] = (parentroot, childid)
             logger.info("child has ids %s" % str(self.attacks[icd.child]))
-            logger.info("child %i parent %i root %i" %
-                        (childid, parentid, parentroot) )
-            r = self.cursor.execute("UPDATE connections SET connection_root = ?, connection_parent = ? WHERE connection = ?",
-                                    (parentroot, parentid, childid) )
+            logger.info("child %i parent %i root %i" % (childid, parentid, parentroot) )
+            if self.log_mode == 'sqlite':
+                r = self.cursor.execute("UPDATE connections SET connection_root = ?, connection_parent = ? WHERE connection = ?",
+                    (parentroot, parentid, childid) )
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    r = self.cursor.execute("UPDATE connections SET connection_root = %s, connection_parent = %s WHERE connection = %s",
+                        (parentroot, parentid, childid) )
+                except Exception as e:
+                    print(e)
             self.dbh.commit()
 
         if icd.child in self.pending:
@@ -689,8 +1238,15 @@ class logsqlhandler(ihandler):
             else:
                 childid = parentid
 
-            self.cursor.execute("UPDATE connections SET connection_root = ? WHERE connection_root = ?",
-                                (parentroot, childid) )
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("UPDATE connections SET connection_root = ? WHERE connection_root = ?",
+                    (parentroot, childid) )
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("UPDATE connections SET connection_root = %s WHERE connection_root = %s",
+                        (parentroot, childid) )
+                except Exception as e:
+                    print(e)
             self.dbh.commit()
 
     def handle_incident_dionaea_connection_free(self, icd):
@@ -707,100 +1263,227 @@ class logsqlhandler(ihandler):
 
 
     def handle_incident_dionaea_module_emu_profile(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con = icd.con
         if con not in self.attacks:
             return
         attackid = self.attacks[con][1]
         logger.info("emu profile for attackid %i" % attackid)
-        self.cursor.execute("INSERT INTO emu_profiles (connection, emu_profile_json) VALUES (?,?)",
-                            (attackid, icd.profile) )
+        if self.log_mode == 'sqlite':
+            self.cursor.execute("INSERT INTO emu_profiles (connection, emu_profile_json) VALUES (?,?)",
+                (attackid, icd.profile) )
+        elif self.log_mode == 'postgresql_psycopg2':
+            try:
+                self.cursor.execute("INSERT INTO emu_profiles (connection, emu_profile_json) VALUES (%s,%s)",
+                    (attackid, icd.profile) )
+            except Exception as e:
+                print(e)
         self.dbh.commit()
 
 
     def handle_incident_dionaea_download_offer(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con=icd.con
         if con not in self.attacks:
             return
         attackid = self.attacks[con][1]
         logger.info("offer for attackid %i" % attackid)
-        self.cursor.execute("INSERT INTO offers (connection, offer_url) VALUES (?,?)",
-                            (attackid, icd.url) )
+        if self.log_mode == 'sqlite':
+            self.cursor.execute("INSERT INTO offers (connection, offer_url) VALUES (?,?)",
+                (attackid, icd.url) )
+        elif self.log_mode == 'postgresql_psycopg2':
+            try:
+                self.cursor.execute("INSERT INTO offers (connection, offer_url) VALUES (%s,%s)",
+                    (attackid, icd.url) )
+            except Exception as e:
+                print(e)
         self.dbh.commit()
 
     def handle_incident_dionaea_download_complete_hash(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con=icd.con
         if con not in self.attacks:
             return
         attackid = self.attacks[con][1]
         logger.info("complete for attackid %i" % attackid)
-        self.cursor.execute("INSERT INTO downloads (connection, download_url, download_md5_hash) VALUES (?,?,?)",
-                            (attackid, icd.url, icd.md5hash) )
+        if self.log_mode == 'sqlite':
+            self.cursor.execute("INSERT INTO downloads (connection, download_url, download_md5_hash) VALUES (?,?,?)",
+                (attackid, icd.url, icd.md5hash) )
+        elif self.log_mode == 'postgresql_psycopg2':
+            try:
+                self.cursor.execute("INSERT INTO downloads (connection, download_url, download_md5_hash) VALUES (%s,%s,%s)",
+                    (attackid, icd.url, icd.md5hash) )
+            except Exception as e:
+                print(e)
         self.dbh.commit()
 
 
     def handle_incident_dionaea_service_shell_listen(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con=icd.con
         if con not in self.attacks:
             return
         attackid = self.attacks[con][1]
         logger.info("listen shell for attackid %i" % attackid)
-        self.cursor.execute("INSERT INTO emu_services (connection, emu_service_url) VALUES (?,?)",
-                            (attackid, "bindshell://"+str(icd.port)) )
+        if self.log_mode == 'sqlite':
+            self.cursor.execute("INSERT INTO emu_services (connection, emu_service_url) VALUES (?,?)",
+                (attackid, "bindshell://"+str(icd.port)) )
+        elif self.log_mode == 'postgresql_psycopg2':
+            try:
+                self.cursor.execute("INSERT INTO emu_services (connection, emu_service_url) VALUES (%s,%s)",
+                    (attackid, "bindshell://"+str(icd.port)) )
+            except Exception as e:
+                print(e)
         self.dbh.commit()
 
     def handle_incident_dionaea_service_shell_connect(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con=icd.con
         if con not in self.attacks:
             return
         attackid = self.attacks[con][1]
         logger.info("connect shell for attackid %i" % attackid)
-        self.cursor.execute("INSERT INTO emu_services (connection, emu_service_url) VALUES (?,?)",
-                            (attackid, "connectbackshell://"+str(icd.host)+":"+str(icd.port)) )
+        if self.log_mode == 'sqlite':
+            self.cursor.execute("INSERT INTO emu_services (connection, emu_service_url) VALUES (?,?)",
+                (attackid, "connectbackshell://"+str(icd.host)+":"+str(icd.port)) )
+        elif self.log_mode == 'postgresql_psycopg2':
+            try:
+                self.cursor.execute("INSERT INTO emu_services (connection, emu_service_url) VALUES (%s,%s)",
+                    (attackid, "connectbackshell://"+str(icd.host)+":"+str(icd.port)) )
+            except Exception as e:
+                print(e)
         self.dbh.commit()
 
     def handle_incident_dionaea_modules_python_p0f(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con=icd.con
         if con in self.attacks:
             attackid = self.attacks[con][1]
-            self.cursor.execute("INSERT INTO p0fs (connection, p0f_genre, p0f_link, p0f_detail, p0f_uptime, p0f_tos, p0f_dist, p0f_nat, p0f_fw) VALUES (?,?,?,?,?,?,?,?,?)",
-                                ( attackid, icd.genre, icd.link, icd.detail, icd.uptime, icd.tos, icd.dist, icd.nat, icd.fw))
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("INSERT INTO p0fs (connection, p0f_genre, p0f_link, p0f_detail, p0f_uptime, p0f_tos, p0f_dist, p0f_nat, p0f_fw) VALUES (?,?,?,?,?,?,?,?,?)",
+                    ( attackid, icd.genre, icd.link, icd.detail, icd.uptime, icd.tos, icd.dist, icd.nat, icd.fw))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("INSERT INTO p0fs (connection, p0f_genre, p0f_link, p0f_detail, p0f_uptime, p0f_tos, p0f_dist, p0f_nat, p0f_fw) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        ( attackid, icd.genre, icd.link, icd.detail, icd.uptime, icd.tos, icd.dist, icd.nat, icd.fw))
+                except Exception as e:
+                    print(e)
             self.dbh.commit()
 
     def handle_incident_dionaea_modules_python_smb_dcerpc_request(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con=icd.con
         if con in self.attacks:
             attackid = self.attacks[con][1]
-            self.cursor.execute("INSERT INTO dcerpcrequests (connection, dcerpcrequest_uuid, dcerpcrequest_opnum) VALUES (?,?,?)",
-                                (attackid, icd.uuid, icd.opnum))
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("INSERT INTO dcerpcrequests (connection, dcerpcrequest_uuid, dcerpcrequest_opnum) VALUES (?,?,?)",
+                    (attackid, icd.uuid, icd.opnum))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("INSERT INTO dcerpcrequests (connection, dcerpcrequest_uuid, dcerpcrequest_opnum) VALUES (%s,%s,%s)",
+                        (attackid, icd.uuid, icd.opnum))
+                except Exception as e:
+                    print(e)
             self.dbh.commit()
 
     def handle_incident_dionaea_modules_python_smb_dcerpc_bind(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con=icd.con
         if con in self.attacks:
             attackid = self.attacks[con][1]
-            self.cursor.execute("INSERT INTO dcerpcbinds (connection, dcerpcbind_uuid, dcerpcbind_transfersyntax) VALUES (?,?,?)",
-                                (attackid, icd.uuid, icd.transfersyntax))
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("INSERT INTO dcerpcbinds (connection, dcerpcbind_uuid, dcerpcbind_transfersyntax) VALUES (?,?,?)",
+                    (attackid, icd.uuid, icd.transfersyntax))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("INSERT INTO dcerpcbinds (connection, dcerpcbind_uuid, dcerpcbind_transfersyntax) VALUES (%s,%s,%s)",
+                        (attackid, icd.uuid, icd.transfersyntax))
+                except Exception as e:
+                    print(e)
             self.dbh.commit()
 
     def handle_incident_dionaea_modules_python_mssql_login(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con = icd.con
         if con in self.attacks:
             attackid = self.attacks[con][1]
-            self.cursor.execute("INSERT INTO logins (connection, login_username, login_password) VALUES (?,?,?)",
-                                (attackid, icd.username, icd.password))
-            self.cursor.execute("INSERT INTO mssql_fingerprints (connection, mssql_fingerprint_hostname, mssql_fingerprint_appname, mssql_fingerprint_cltintname) VALUES (?,?,?,?)",
-                                (attackid, icd.hostname, icd.appname, icd.cltintname))
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("INSERT INTO logins (connection, login_username, login_password) VALUES (?,?,?)",
+                    (attackid, icd.username, icd.password))
+                self.cursor.execute("INSERT INTO mssql_fingerprints (connection, mssql_fingerprint_hostname, mssql_fingerprint_appname, mssql_fingerprint_cltintname) VALUES (?,?,?,?)", 
+                    (attackid, icd.hostname, icd.appname, icd.cltintname))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("INSERT INTO logins (connection, login_username, login_password) VALUES (%s,%s,%s)",
+                        (attackid, icd.username, icd.password))
+                    self.cursor.execute("INSERT INTO mssql_fingerprints (connection, mssql_fingerprint_hostname, mssql_fingerprint_appname, mssql_fingerprint_cltintname) VALUES (%s,%s,%s,%s)", 
+                        (attackid, icd.hostname, icd.appname, icd.cltintname))
+                except Exception as e:
+                    print(e)
             self.dbh.commit()
 
     def handle_incident_dionaea_modules_python_mssql_cmd(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con = icd.con
         if con in self.attacks:
             attackid = self.attacks[con][1]
-            self.cursor.execute("INSERT INTO mssql_commands (connection, mssql_command_status, mssql_command_cmd) VALUES (?,?,?)",
-                                (attackid, icd.status, icd.cmd))
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("INSERT INTO mssql_commands (connection, mssql_command_status, mssql_command_cmd) VALUES (?,?,?)", 
+                    (attackid, icd.status, icd.cmd))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("INSERT INTO mssql_commands (connection, mssql_command_status, mssql_command_cmd) VALUES (%s,%s,%s)", 
+                        (attackid, icd.status, icd.cmd))
+                except Exception as e:
+                    print(e)
             self.dbh.commit()
 
     def handle_incident_dionaea_modules_python_virustotal_report(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         md5 = icd.md5hash
         f = open(icd.path, mode='r')
         j = json.load(f)
@@ -808,8 +1491,15 @@ class logsqlhandler(ihandler):
         if j['response_code'] == 1: # file was known to virustotal
             permalink = j['permalink']
             date = j['scan_date']
-            self.cursor.execute("INSERT INTO virustotals (virustotal_md5_hash, virustotal_permalink, virustotal_timestamp) VALUES (?,?,strftime('%s',?))",
-                                (md5, permalink, date))
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("INSERT INTO virustotals (virustotal_md5_hash, virustotal_permalink, virustotal_timestamp) VALUES (?,?,strftime('%s',?))", 
+                    (md5, permalink, date))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("INSERT INTO virustotals (virustotal_md5_hash, virustotal_permalink, virustotal_timestamp) VALUES (%s,%s,extract(epoch from %s))", 
+                        (md5, permalink, date))
+                except Exception as e:
+                    print(e)
             self.dbh.commit()
 
             virustotal = self.cursor.lastrowid
@@ -821,37 +1511,80 @@ class logsqlhandler(ihandler):
                 if res == '':
                     res = None
 
-                self.cursor.execute("""INSERT INTO virustotalscans (virustotal, virustotalscan_scanner, virustotalscan_result) VALUES (?,?,?)""",
-                                    (virustotal, av, res))
+                if self.log_mode == 'sqlite':
+                    self.cursor.execute("""INSERT INTO virustotalscans (virustotal, virustotalscan_scanner, virustotalscan_result) VALUES (?,?,?)""",
+                        (virustotal, av, res))
+                elif self.log_mode == 'postgresql_psycopg2':
+                    try:
+                        self.cursor.execute("""INSERT INTO virustotalscans (virustotal, virustotalscan_scanner, virustotalscan_result) VALUES (%s,%s,%s)""",
+                            (virustotal, av, res))
+                    except Exception as e:
+                        print(e)
 #                logger.debug("scanner {} result {}".format(av,scans[av]))
             self.dbh.commit()
 
     def handle_incident_dionaea_modules_python_mysql_login(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con = icd.con
         if con in self.attacks:
             attackid = self.attacks[con][1]
-            self.cursor.execute("INSERT INTO logins (connection, login_username, login_password) VALUES (?,?,?)",
-                                (attackid, icd.username, icd.password))
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("INSERT INTO logins (connection, login_username, login_password) VALUES (?,?,?)",
+                    (attackid, icd.username, icd.password))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("INSERT INTO logins (connection, login_username, login_password) VALUES (%s,%s,%s)",
+                        (attackid, icd.username, icd.password))
+                except Exception as e:
+                    print(e)
             self.dbh.commit()
 
 
     def handle_incident_dionaea_modules_python_mysql_command(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con = icd.con
         if con in self.attacks:
             attackid = self.attacks[con][1]
-            self.cursor.execute("INSERT INTO mysql_commands (connection, mysql_command_cmd) VALUES (?,?)",
-                                (attackid, icd.command))
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("INSERT INTO mysql_commands (connection, mysql_command_cmd) VALUES (?,?)",
+                    (attackid, icd.command))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("INSERT INTO mysql_commands (connection, mysql_command_cmd) VALUES (%s,%s)",
+                        (attackid, icd.command))
+                except Exception as e:
+                    print(e)
             cmdid = self.cursor.lastrowid
 
             if hasattr(icd, 'args'):
                 args = icd.args
                 for i in range(len(args)):
                     arg = args[i]
-                    self.cursor.execute("INSERT INTO mysql_command_args (mysql_command, mysql_command_arg_index, mysql_command_arg_data) VALUES (?,?,?)",
-                                        (cmdid, i, arg))
+                    if self.log_mode == 'sqlite':
+                        self.cursor.execute("INSERT INTO mysql_command_args (mysql_command, mysql_command_arg_index, mysql_command_arg_data) VALUES (?,?,?)",
+                            (cmdid, i, arg))
+                    elif self.log_mode == 'postgresql_psycopg2':
+                        try:
+                            self.cursor.execute("INSERT INTO mysql_command_args (mysql_command, mysql_command_arg_index, mysql_command_arg_data) VALUES (%s,%s,%s)",
+                                (cmdid, i, arg))
+                        except Exception as e:
+                            print(e)
             self.dbh.commit()
 
     def handle_incident_dionaea_modules_python_sip_command(self, icd):
+        if self.log_mode == 'sqlite':
+            import sqlite3
+        elif self.log_mode == 'postgresql_psycopg2':
+            import psycopg2
+
         con = icd.con
         if con not in self.attacks:
             return
@@ -882,23 +1615,46 @@ class logsqlhandler(ihandler):
             return allow
 
         attackid = self.attacks[con][1]
-        self.cursor.execute("""INSERT INTO sip_commands
-            (connection, sip_command_method, sip_command_call_id,
-            sip_command_user_agent, sip_command_allow) VALUES (?,?,?,?,?)""",
-                            (attackid, icd.method, icd.call_id, icd.user_agent, calc_allow(icd.allow)))
+        if self.log_mode == 'sqlite':
+            self.cursor.execute("""INSERT INTO sip_commands
+                (connection, sip_command_method, sip_command_call_id,
+                sip_command_user_agent, sip_command_allow) VALUES (?,?,?,?,?)""",
+                (attackid, icd.method, icd.call_id, icd.user_agent, calc_allow(icd.allow)))
+        elif self.log_mode == 'postgresql_psycopg2':
+            try:
+                self.cursor.execute("""INSERT INTO sip_commands
+                    (connection, sip_command_method, sip_command_call_id,
+                    sip_command_user_agent, sip_command_allow) VALUES (%s,%s,%s,%s,%s)""",
+                    (attackid, icd.method, icd.call_id, icd.user_agent, calc_allow(icd.allow)))
+            except Exception as e:
+                print(e)
         cmdid = self.cursor.lastrowid
 
         def add_addr(cmd, _type, addr):
-            self.cursor.execute("""INSERT INTO sip_addrs
-                (sip_command, sip_addr_type, sip_addr_display_name,
-                sip_addr_uri_scheme, sip_addr_uri_user, sip_addr_uri_password,
-                sip_addr_uri_host, sip_addr_uri_port) VALUES (?,?,?,?,?,?,?,?)""",
-                                (
-                                    cmd, _type, addr['display_name'],
-                                    addr['uri']['scheme'], addr['uri'][
-                                        'user'], addr['uri']['password'],
-                                    addr['uri']['host'], addr['uri']['port']
-                                ))
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("""INSERT INTO sip_addrs
+                    (sip_command, sip_addr_type, sip_addr_display_name,
+                    sip_addr_uri_scheme, sip_addr_uri_user, sip_addr_uri_password,
+                    sip_addr_uri_host, sip_addr_uri_port) VALUES (?,?,?,?,?,?,?,?)""",
+                    (
+                        cmd, _type, addr['display_name'],
+                        addr['uri']['scheme'], addr['uri']['user'], addr['uri']['password'],
+                        addr['uri']['host'], addr['uri']['port']
+                    ))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("""INSERT INTO sip_addrs
+                        (sip_command, sip_addr_type, sip_addr_display_name,
+                        sip_addr_uri_scheme, sip_addr_uri_user, sip_addr_uri_password,
+                        sip_addr_uri_host, sip_addr_uri_port) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (
+                            cmd, _type, addr['display_name'],
+                            addr['uri']['scheme'], addr['uri']['user'], addr['uri']['password'],
+                            addr['uri']['host'], addr['uri']['port']
+                        ))
+                except Exception as e:
+                    print(e)
+
         add_addr(cmdid,'addr',icd.get('addr'))
         add_addr(cmdid,'to',icd.get('to'))
         add_addr(cmdid,'contact',icd.get('contact'))
@@ -906,54 +1662,114 @@ class logsqlhandler(ihandler):
             add_addr(cmdid,'from',i)
 
         def add_via(cmd, via):
-            self.cursor.execute("""INSERT INTO sip_vias
-                (sip_command, sip_via_protocol, sip_via_address, sip_via_port)
-                VALUES (?,?,?,?)""",
-                                (
-                                    cmd, via['protocol'],
-                                    via['address'], via['port']
+            if self.log_mode == 'sqlite':
+                self.cursor.execute("""INSERT INTO sip_vias
+                    (sip_command, sip_via_protocol, sip_via_address, sip_via_port)
+                    VALUES (?,?,?,?)""",
+                    (
+                        cmd, via['protocol'],
+                        via['address'], via['port']
 
-                                ))
+                    ))
+            elif self.log_mode == 'postgresql_psycopg2':
+                try:
+                    self.cursor.execute("""INSERT INTO sip_vias
+                        (sip_command, sip_via_protocol, sip_via_address, sip_via_port)
+                        VALUES (%s,%s,%s,%s)""",
+                        (
+                            cmd, via['protocol'],
+                            via['address'], via['port']
+
+                        ))
+                except Exception as e:
+                    print(e)
 
         for i in icd.get('via'):
             add_via(cmdid, i)
 
         def add_sdp(cmd, sdp):
             def add_origin(cmd, o):
-                self.cursor.execute("""INSERT INTO sip_sdp_origins
-                    (sip_command, sip_sdp_origin_username,
-                    sip_sdp_origin_sess_id, sip_sdp_origin_sess_version,
-                    sip_sdp_origin_nettype, sip_sdp_origin_addrtype,
-                    sip_sdp_origin_unicast_address)
-                    VALUES (?,?,?,?,?,?,?)""",
-                                    (
-                                        cmd, o['username'],
-                                        o['sess_id'], o['sess_version'],
-                                        o['nettype'], o['addrtype'],
-                                        o['unicast_address']
-                                    ))
+                if self.log_mode == 'sqlite':
+                    self.cursor.execute("""INSERT INTO sip_sdp_origins
+                        (sip_command, sip_sdp_origin_username,
+                        sip_sdp_origin_sess_id, sip_sdp_origin_sess_version,
+                        sip_sdp_origin_nettype, sip_sdp_origin_addrtype,
+                        sip_sdp_origin_unicast_address)
+                        VALUES (?,?,?,?,?,?,?)""",
+                        (
+                            cmd, o['username'],
+                            o['sess_id'], o['sess_version'],
+                            o['nettype'], o['addrtype'],
+                            o['unicast_address']
+                        ))
+                elif self.log_mode == 'postgresql_psycopg2':
+                    try:
+                        self.cursor.execute("""INSERT INTO sip_sdp_origins
+                            (sip_command, sip_sdp_origin_username,
+                            sip_sdp_origin_sess_id, sip_sdp_origin_sess_version,
+                            sip_sdp_origin_nettype, sip_sdp_origin_addrtype,
+                            sip_sdp_origin_unicast_address)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                            (
+                                cmd, o['username'],
+                                o['sess_id'], o['sess_version'],
+                                o['nettype'], o['addrtype'],
+                                o['unicast_address']
+                            ))
+                    except Exception as e:
+                        print(e)
             def add_condata(cmd, c):
-                self.cursor.execute("""INSERT INTO sip_sdp_connectiondatas
-                    (sip_command, sip_sdp_connectiondata_nettype,
-                    sip_sdp_connectiondata_addrtype, sip_sdp_connectiondata_connection_address,
-                    sip_sdp_connectiondata_ttl, sip_sdp_connectiondata_number_of_addresses)
-                    VALUES (?,?,?,?,?,?)""",
-                                    (
-                                        cmd, c['nettype'],
-                                        c['addrtype'], c['connection_address'],
-                                        c['ttl'], c['number_of_addresses']
-                                    ))
+                if self.log_mode == 'sqlite':
+                    self.cursor.execute("""INSERT INTO sip_sdp_connectiondatas
+                        (sip_command, sip_sdp_connectiondata_nettype,
+                        sip_sdp_connectiondata_addrtype, sip_sdp_connectiondata_connection_address,
+                        sip_sdp_connectiondata_ttl, sip_sdp_connectiondata_number_of_addresses)
+                        VALUES (?,?,?,?,?,?)""",
+                        (
+                            cmd, c['nettype'],
+                            c['addrtype'], c['connection_address'],
+                            c['ttl'], c['number_of_addresses']
+                        ))
+                elif self.log_mode == 'postgresql_psycopg2':
+                    try:
+                        self.cursor.execute("""INSERT INTO sip_sdp_connectiondatas
+                            (sip_command, sip_sdp_connectiondata_nettype,
+                            sip_sdp_connectiondata_addrtype, sip_sdp_connectiondata_connection_address,
+                            sip_sdp_connectiondata_ttl, sip_sdp_connectiondata_number_of_addresses)
+                            VALUES (%s,%s,%s,%s,%s,%s)""",
+                            (
+                                cmd, c['nettype'],
+                                c['addrtype'], c['connection_address'],
+                                c['ttl'], c['number_of_addresses']
+                            ))
+                    except Exception as e:
+                        print(e)
             def add_media(cmd, c):
-                self.cursor.execute("""INSERT INTO sip_sdp_medias
-                    (sip_command, sip_sdp_media_media,
-                    sip_sdp_media_port, sip_sdp_media_number_of_ports,
-                    sip_sdp_media_proto)
-                    VALUES (?,?,?,?,?)""",
-                                    (
-                                        cmd, c['media'],
-                                        c['port'], c['number_of_ports'],
-                                        c['proto']
-                                    ))
+                if self.log_mode == 'sqlite':
+                    self.cursor.execute("""INSERT INTO sip_sdp_medias
+                        (sip_command, sip_sdp_media_media,
+                        sip_sdp_media_port, sip_sdp_media_number_of_ports,
+                        sip_sdp_media_proto)
+                        VALUES (?,?,?,?,?)""",
+                        (
+                            cmd, c['media'],
+                            c['port'], c['number_of_ports'],
+                            c['proto']
+                        ))
+                elif self.log_mode == 'postgresql_psycopg2':
+                    try:
+                        self.cursor.execute("""INSERT INTO sip_sdp_medias
+                            (sip_command, sip_sdp_media_media,
+                            sip_sdp_media_port, sip_sdp_media_number_of_ports,
+                            sip_sdp_media_proto)
+                            VALUES (%s,%s,%s,%s,%s)""",
+                            (
+                                cmd, c['media'],
+                                c['port'], c['number_of_ports'],
+                                c['proto']
+                            ))
+                    except Exception as e:
+                        print(e)
             if 'o' in sdp:
                 add_origin(cmd, sdp['o'])
             if 'c' in sdp:

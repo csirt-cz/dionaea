@@ -361,9 +361,16 @@ modules = {
 			}
 		}
 		logsql = {
-			mode = "sqlite" // so far there is only sqlite
+			mode = "sqlite" // so far there is only sqlite and postgresql_psycopg2
 			sqlite = {
 				file = "var/dionaea/logsql.sqlite"
+			}
+			postgresql_psycopg2 = {
+				database = "dbname"
+				user = "username"
+				password = "password"
+				host = "127.0.0.1"
+				port = "5432"
 			}
 		}
 		logxmpp = {
