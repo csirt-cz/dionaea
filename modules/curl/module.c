@@ -29,8 +29,6 @@
 #include <glib.h>
 #include <stdio.h>
 
-#include <lcfg/lcfg.h>
-#include <lcfgx/lcfgx_tree.h>
 #include <curl/curl.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -49,7 +47,6 @@
 
 static struct 
 {
-	struct lcfgx_tree_node *config;
 	struct ev_timer timer_event;
 	CURLM *multi;
 	struct ihandler *download_ihandler;
@@ -423,10 +420,10 @@ void session_upload_new(struct incident *i)
 	GHashTableIter iter;
 	gpointer key, value;
 	GString *gstemp;
-	char *url;
-
 	struct session *session = NULL;
+	char *url = NULL;
 
+			
 	if (incident_value_string_get(i, "_url", &gstemp) == false )
 	{
 		g_debug("dionaea.upload.request got no _url in incident!");
@@ -434,12 +431,11 @@ void session_upload_new(struct incident *i)
 	}
 
 	session = session_new();
+
 	session->type = session_type_upload;
 
 	url = gstemp->str;
-
 	session->url = g_strdup(url);
-
 
 	g_hash_table_iter_init (&iter, i->data);
 
@@ -587,13 +583,13 @@ static void curl_ihandler_cb(struct incident *i, void *ctx)
 	GString *url;
 	if( strcmp(i->origin, "dionaea.download.offer") == 0 )
 	{
-		if( incident_value_string_get(i, "url", &url) )
-		{
+		if( incident_value_bytes_get(i, "url", &url) || incident_value_string_get(i, "url", &url) ) {
 			if( strncasecmp(url->str,  "http", 4) != 0 )
 				return;
 			session_download_new(i, url->str);
-		} else
+		} else {
 			g_critical("download without url?");
+		}
 	} else
 		if( strcmp(i->origin, "dionaea.upload.request") == 0 )
 	{
@@ -601,26 +597,20 @@ static void curl_ihandler_cb(struct incident *i, void *ctx)
 	}
 }
 
-static bool curl_config(struct lcfgx_tree_node *node)
+static bool curl_config(void)
 {
-	g_debug("%s", __PRETTY_FUNCTION__);
-	curl_runtime.config = node;
-	return true;
+  GError *error = NULL;
+
+  g_debug("%s", __PRETTY_FUNCTION__);
+
+  curl_runtime.download_dir = g_key_file_get_string(g_dionaea->config, "dionaea", "download.dir", &error);
+
+  return true;
 }
 
 static bool curl_new(struct dionaea *d)
 {
 	g_debug("%s", __PRETTY_FUNCTION__);
-
-	struct lcfgx_tree_node *node;
-	if( lcfgx_get_string(g_dionaea->config.root, &node, "downloads.dir") != LCFGX_PATH_FOUND_TYPE_OK )
-	{
-		g_warning("missing downloads.dir in dionaea.conf");
-		return false;
-	}
-
-	curl_runtime.download_dir = g_strdup((char *)node->value.string.data);
-
 
 	if( curl_global_init(CURL_GLOBAL_ALL) != 0 )
 		return false;
@@ -693,7 +683,7 @@ static bool curl_freex(void)
 	return true;
 }
 
-static bool curl_hup(struct lcfgx_tree_node *node)
+static bool curl_hup(void)
 {
 	g_debug("%s", __PRETTY_FUNCTION__);
 	return true;

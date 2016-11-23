@@ -7,7 +7,7 @@ sinclude(m4/az_python.m4)
 sinclude(m4/az_bind_ipv4_mapped_localhost.m4)
 
 AC_PREREQ(2.59)
-AC_INIT([dionaea], [0.1.0], [nepenthesdev@gmail.com])
+AC_INIT([dionaea], [0.6.0], [])
 AM_INIT_AUTOMAKE
 AC_REVISION([$Id$])
 
@@ -289,61 +289,6 @@ if test x$enable_udns = "xyes" ; then
 fi
 
 dnl **************************************************
-dnl * libgc                                         *
-dnl **************************************************
-
-AC_SUBST([LIB_GC_CFLAGS])
-AC_SUBST([LIB_GC_LIBS])
-
-
-enable_gc="yes"
-
-AC_ARG_ENABLE(gc, [  --enable-gc      enable support for libgc],
-			[enable_gc="$enableval"],[enable_gc="yes"])
-
-AC_ARG_WITH(gc-include,
-			[  --with-gc-include=DIR  libgc include dir],
-				      [gc_inc="$withval"],[gc_inc=no])
-AC_ARG_WITH(gc-lib,
-			[  --with-gc-lib=DIR  libgc library dir],
-			[gc_lib="$withval"],[gc_lib=no])
-
-
-if test x$enable_gc = "xyes" ; then
-	OLD_CPPFLAGS=${CPPFLAGS};
-	if test x$gc_inc != "xno"; then
-		CPPFLAGS="${CPPFLAGS} -I${gc_inc}"
-	fi
-	
-	AC_CHECK_HEADER(gc.h,[enable_gc=yes],[enable_gc=no])
-	
-	if test x$enable_gc = "xyes" ; then
-		OLD_LDFLAGS=${LDFLAGS}
-		if test x$gc_lib != "xno"; then
-			LDFLAGS="${LDFLAGS}  -L${gc_lib}"
-		fi
-	
-		AC_CHECK_LIB([gc],[GC_gcollect],enable_gc="yes", enable_gc="no")
-	
-		if test x$enable_gc = "xyes" ; then
-			if test x$gc_lib != "xno"; then
-				LIB_GC_LIBS="-L$gc_lib -lgc"
-			else
-				LIB_GC_LIBS="-lgc"
-			fi
-			if test x$gc_inc != "xno"; then
-				LIB_GC_CFLAGS="-I$gc_inc"
-			else
-				LIB_GC_CFLAGS=""
-			fi
-			AC_DEFINE([HAVE_LIBGC], [1], [Define to 1 to compile with gc support])
-		fi
-	fi
-	CPPFLAGS=${OLD_CPPFLAGS}
-	LDFLAGS=${OLD_LDFLAGS}
-fi
-
-dnl **************************************************
 dnl * libssl                                          *
 dnl **************************************************
 
@@ -610,7 +555,7 @@ AZ_PYTHON_ENABLE( )             # Optional
 AZ_PYTHON_WITH( )               # Optional
 AZ_PYTHON_PATH( )               # or AZ_PYTHON_INSIST( )
 # if $PYTHON is not defined, then the following do nothing.
-AZ_PYTHON_VERSION_ENSURE( [3.2] )
+AZ_PYTHON_VERSION_ENSURE( [3.4] )
 AZ_PYTHON_CSPEC
 AZ_PYTHON_LSPEC
 
@@ -641,65 +586,6 @@ if test x$enable_cython = "xyes" ; then
 	fi
 fi
 
-
-
-dnl **************************************************
-dnl * liblcfg                                        *
-dnl **************************************************
-
-AC_SUBST([LIB_LCFG_CFLAGS])
-AC_SUBST([LIB_LCFG_LIBS])
-
-
-enable_lcfg="yes"
-
-AC_ARG_ENABLE(lcfg, [  --enable-lcfg      enable support for liblcfg],
-			[enable_lcfg="$enableval"],[enable_lcfg="yes"])
-
-AC_ARG_WITH(lcfg-include,
-			[  --with-lcfg-include=DIR  liblcfg include dir],
-				      [lcfg_inc="$withval"],[lcfg_inc=no])
-AC_ARG_WITH(lcfg-lib,
-			[  --with-lcfg-lib=DIR  liblcfg library dir],
-			[lcfg_lib="$withval"],[lcfg_lib=no])
-
-
-if test x$enable_lcfg = "xyes" ; then
-	OLD_CPPFLAGS=${CPPFLAGS};
-	if test x$lcfg_inc != "xno"; then
-		CPPFLAGS="${CPPFLAGS} -I${lcfg_inc}"
-	fi
-	
-	AC_CHECK_HEADER(lcfg/lcfg.h,[enable_lcfg=yes],[enable_lcfg=no])
-	
-	if test x$enable_lcfg = "xyes" ; then
-		OLD_LDFLAGS=${LDFLAGS}
-		if test x$lcfg_lib != "xno"; then
-			LDFLAGS="${LDFLAGS}  -L${lcfg_lib}"
-		fi
-	
-		AC_CHECK_LIB([lcfg],[lcfg_new],enable_lcfg="yes", enable_lcfg="no")
-		if test x$enable_lcfg = "xyes" ; then
-			if test x$lcfg_lib != "xno"; then
-				LIB_LCFG_LIBS="-L$lcfg_lib -llcfg"
-			else
-				LIB_LCFG_LIBS="-llcfg"
-			fi
-			if test x$lcfg_inc != "xno"; then
-				LIB_LCFG_CFLAGS="-I$lcfg_inc"
-			else
-				LIB_LCFG_CFLAGS=""
-			fi
-			AC_DEFINE([HAVE_LIBLCFG], [1], [Define to 1 to compile with lcfg support])
-		fi
-	fi
-	CPPFLAGS=${OLD_CPPFLAGS}
-	LDFLAGS=${OLD_LDFLAGS}
-fi
-
-if test x$enable_lcfg = "xno" ; then
-	AC_MSG_ERROR([liblcfg is missing - install it please - download from http://liblcfg.carnivore.it])
-fi
 
 
 dnl **************************************************
@@ -989,13 +875,25 @@ AC_DEFINE_DIR(DATADIR, [datadir], [The directory for installing idiosyncratic re
 AC_DEFINE_DIR(DATAROOTDIR, [datarootdir], [The root of the directory tree for read-only architecture-independent data files.])
 
 AC_CONFIG_FILES([Makefile
+				conf/dionaea.cfg
+				conf/ihandlers/fail2ban.yaml
+				conf/ihandlers/log_db_sql.yaml
+				conf/ihandlers/log_incident.yaml
+				conf/ihandlers/log_json.yaml
+				conf/ihandlers/log_sqlite.yaml
+				conf/ihandlers/virustotal.yaml
+				conf/services/ftp.yaml
+				conf/services/http.yaml
+				conf/services/sip.yaml
+				conf/services/tftp.yaml
+				conf/services/upnp.yaml
 				src/Makefile
 				include/Makefile
 				modules/Makefile
 				modules/nc/Makefile
 				modules/python/Makefile
 				modules/python/setup.py
-				modules/python/scripts/Makefile
+				modules/python/dionaea/Makefile
 				modules/python/util/Makefile
 				modules/emu/Makefile
 				modules/curl/Makefile
@@ -1031,10 +929,6 @@ echo ""
 echo "cython                             : $enable_cython"
 echo " - binary                          : $CYTHON_BIN"
 echo ""
-echo "lcfg                               : $enable_lcfg"
-echo " - cflags                          : $LIB_LCFG_CFLAGS"
-echo " - libs                            : $LIB_LCFG_LIBS"
-echo ""
 echo "ssl                                : $enable_ssl"
 echo " - cflags                          : $LIB_SSL_CFLAGS"
 echo " - libs                            : $LIB_SSL_LIBS"
@@ -1062,10 +956,6 @@ echo ""
 echo "loudmouth                          : $enable_loudmouth"
 echo " - cflags                          : $LIB_LOUDMOUTH_CFLAGS"
 echo " - libs                            : $LIB_LOUDMOUTH_LIBS"
-echo ""
-echo "gc                                 : $enable_gc"
-echo " - cflags                          : $LIB_GC_CFLAGS"
-echo " - libs                            : $LIB_GC_LIBS"
 echo ""
 echo "curl                               : $enable_curl"
 echo " - cflags                          : $LIB_CURL_CFLAGS"

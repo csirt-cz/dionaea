@@ -54,9 +54,6 @@
 #include <netpacket/packet.h> // af_packet
 #endif
 
-#include <lcfg/lcfg.h>
-#include <lcfgx/lcfgx_tree.h>
-
 #include "connection.h"
 #include "dionaea.h"
 #include "modules.h"
@@ -93,7 +90,6 @@ struct processor proc_python_bistream =
 
 static struct python_runtime
 {
-	struct lcfgx_tree_node *config;
 	struct ev_io python_cli_io_in;
 	FILE *stdIN;
 	GHashTable *imports;
@@ -127,10 +123,9 @@ struct import
 
 
 
-static bool config(struct lcfgx_tree_node *node)
+static bool config(void)
 {
-	lcfgx_tree_dump(node,0);
-	runtime.config = node;
+	// ToDo: Try to reload config
 	return true;
 }
 
@@ -186,108 +181,93 @@ static void python_mkshell_ihandler_cb(struct incident *i, void *ctx)
 
 }
 
-static bool hupy(struct lcfgx_tree_node *node)
+static bool hupy(void)
 {
-	g_debug("%s node %p",  __PRETTY_FUNCTION__, node);
-	runtime.config = node;
-	struct lcfgx_tree_node *files;
-	if( lcfgx_get_list(runtime.config, &files, "imports") == LCFGX_PATH_FOUND_TYPE_OK )
-	{
-		struct lcfgx_tree_node *file;
-		for( file = files->value.elements; file != NULL; file = file->next )
-		{
-//			char *name = file->value.string.data;
-			char *name;
-			if( asprintf(&name, "dionaea.%s", (char *)file->value.string.data) == 0)
-				continue;
+	g_debug("%s node",  __PRETTY_FUNCTION__);
+	gchar **module_names;
+	GError *error = NULL;
+	gsize num;
+	gchar **module_name;
 
-			struct import *i;
-			if( (i = g_hash_table_lookup(runtime.imports, name)) != NULL )
-			{
-				g_message("Import %s exists, reloading", name);
+	module_names = g_key_file_get_string_list(g_dionaea->config, "module.python", "imports", &num, &error);
 
-				PyObject *func = PyObject_GetAttrString(i->module, "stop");
-				if( func != NULL )
-				{
-					PyObject *arglist = Py_BuildValue("()");
-					PyObject *r = PyEval_CallObject(func, arglist);
-					traceback();
-//					PyErr_Print();
-					Py_DECREF(arglist);
-					Py_XDECREF(r);
-					Py_DECREF(func);
-				} else
-				{
-					traceback();
-				}
+	// ToDo: check error
+	for (module_name = module_names; *module_name; module_name++) {
+		struct import *i;
+		if( (i = g_hash_table_lookup(runtime.imports, module_name)) != NULL ) {
+			g_message("Import %s exists, reloading", *module_name);
 
-				PyObject *module = PyImport_ReloadModule(i->module);
-				if( module == NULL )
-				{
-					PyErr_Print();
-					g_critical("Reloading module %s failed", i->name);
-					module = i->module;
-				} else
-				{
-					Py_DECREF(module); 
-					i->module = module;
-				}
-				func = PyObject_GetAttrString(module, "new");
-				if( func != NULL )
-				{
-					PyObject *arglist = Py_BuildValue("()");
-					PyObject *r = PyEval_CallObject(func, arglist);
-					traceback();
-					Py_DECREF(arglist);
-					Py_XDECREF(r);
-					Py_DECREF(func);
-				} else
-				{
-					traceback();
-				}
-				func = PyObject_GetAttrString(module, "start");
-				if( func != NULL )
-				{
-					PyObject *arglist = Py_BuildValue("()");
-					PyObject *r = PyEval_CallObject(func, arglist);
-					traceback();
-					Py_DECREF(arglist);
-					Py_XDECREF(r);
-					Py_DECREF(func);
-				} else
-				{
-					traceback();
-				}
-			} else
-			{
-				g_message("New Import %s", name);
-				PyObject *module = PyImport_ImportModule(name);
-				if( module == NULL )
-				{
-					g_critical("Could not import module %s", name);
-					free(name);
-					continue;
-				}
-				Py_DECREF(module); 
-				i = g_malloc0(sizeof(struct import));
-				i->name = g_strdup(name);
-				i->module = module;
-				g_hash_table_insert(runtime.imports, i->name, i);
-
-				PyObject *func = PyObject_GetAttrString(module, "new");
-				if( func != NULL )
-				{
-					PyObject *arglist = Py_BuildValue("()");
-					PyObject *r = PyEval_CallObject(func, arglist);
-					Py_DECREF(arglist);
-					Py_XDECREF(r);
-					Py_DECREF(func);
-				} else
-					PyErr_Clear();
-
+			PyObject *func = PyObject_GetAttrString(i->module, "stop");
+			if ( func != NULL ) {
+				PyObject *arglist = Py_BuildValue("()");
+				PyObject *r = PyEval_CallObject(func, arglist);
+				traceback();
+				// PyErr_Print();
+				Py_DECREF(arglist);
+				Py_XDECREF(r);
+				Py_DECREF(func);
+			} else {
+				traceback();
 			}
-			free(name);
+
+			PyObject *module = PyImport_ReloadModule(i->module);
+			if( module == NULL ) {
+				PyErr_Print();
+				g_critical("Reloading module %s failed", i->name);
+				module = i->module;
+			} else {
+				Py_DECREF(module);
+				i->module = module;
+			}
+			func = PyObject_GetAttrString(module, "new");
+			if( func != NULL ) {
+				PyObject *arglist = Py_BuildValue("()");
+				PyObject *r = PyEval_CallObject(func, arglist);
+				traceback();
+				Py_DECREF(arglist);
+				Py_XDECREF(r);
+				Py_DECREF(func);
+			} else {
+				traceback();
+			}
+			func = PyObject_GetAttrString(module, "start");
+			if( func != NULL ) {
+				PyObject *arglist = Py_BuildValue("()");
+				PyObject *r = PyEval_CallObject(func, arglist);
+				traceback();
+				Py_DECREF(arglist);
+				Py_XDECREF(r);
+				Py_DECREF(func);
+			} else {
+				traceback();
+			}
+		} else {
+			g_message("New Import %s", *module_name);
+			PyObject *module = PyImport_ImportModule(*module_name);
+			if( module == NULL ) {
+				g_critical("Could not import module %s", *module_name);
+				//free(module_name);
+				continue;
+			}
+			Py_DECREF(module);
+			i = g_malloc0(sizeof(struct import));
+			i->name = g_strdup(*module_name);
+			i->module = module;
+			g_hash_table_insert(runtime.imports, i->name, i);
+
+			PyObject *func = PyObject_GetAttrString(module, "new");
+			if( func != NULL ) {
+				PyObject *arglist = Py_BuildValue("()");
+				PyObject *r = PyEval_CallObject(func, arglist);
+				Py_DECREF(arglist);
+				Py_XDECREF(r);
+				Py_DECREF(func);
+			} else {
+				PyErr_Clear();
+			}
+
 		}
+		//free(name);
 	}
 	return true;
 }
@@ -329,7 +309,7 @@ static bool freepy(void)
 
 static bool start(void)
 {
-	g_warning("%s %s", __PRETTY_FUNCTION__, __FILE__);
+	g_info("%s %s", __PRETTY_FUNCTION__, __FILE__);
 	GHashTableIter iter;
 	gpointer key, value;
 	g_hash_table_iter_init (&iter, runtime.imports);
@@ -378,63 +358,58 @@ static bool new(struct dionaea *dionaea)
 	PyRun_SimpleString("import sys");
 	char relpath[1024];
 	int i=0;
-	struct lcfgx_tree_node *paths;
-	if( lcfgx_get_list(runtime.config, &paths, "sys_path") == LCFGX_PATH_FOUND_TYPE_OK )
-	{
-		struct lcfgx_tree_node *path;
-		for( path = paths->value.elements; path != NULL; path = path->next )
-		{
-			char *name = path->value.string.data;
-			if( strcmp(name, "default") == 0 )
-				sprintf(relpath, "sys.path.insert(%i, '%s/lib/dionaea/python/')", i, PREFIX);
-			else
-				if( *name == '/' )
+	gchar **sys_paths;
+	GError *error = NULL;
+	gsize num;
+	gchar **sys_path;
+	sys_paths = g_key_file_get_string_list(g_dionaea->config, "module.python", "sys_paths", &num, &error);
+
+	for (sys_path = sys_paths; *sys_path; sys_path++) {
+		if( strcmp(*sys_path, "default") == 0 ) {
+			sprintf(relpath, "sys.path.insert(%i, '%s/lib/dionaea/python/')", i, PREFIX);
+		} else {
+			// ToDO
+		/*	if( *sys_path == '/' )
 				sprintf(relpath, "sys.path.insert(%i, '%s')", i, name);
 			else
 				sprintf(relpath, "sys.path.insert(%i, '%s/%s')", i, PREFIX, name);
-			g_debug("running %s %s", relpath, name);
-			PyRun_SimpleString(relpath); 
-			i++;
+				*/
 		}
+		g_debug("running %s %s", relpath, *sys_path);
+		PyRun_SimpleString(relpath);
+		i++;
 	}
 	PyRun_SimpleString("from dionaea.core import init_traceables");
 	PyRun_SimpleString("init_traceables()");
 
 	runtime.imports = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
-	struct lcfgx_tree_node *files;
-	if( lcfgx_get_list(runtime.config, &files, "imports") == LCFGX_PATH_FOUND_TYPE_OK )
-	{
-		struct lcfgx_tree_node *file;
-		for( file = files->value.elements; file != NULL; file = file->next )
-		{
-			char *name;
-			if( asprintf(&name, "dionaea.%s", (char *)file->value.string.data) == 0)
-				continue;
 
-			PyObject *module = PyImport_ImportModule(name);
-			if( module == NULL )
-			{
-				PyErr_Print();
-				g_error("Import failed %s", name);
-			}
-			Py_DECREF(module); 
-			struct import *i = g_malloc0(sizeof(struct import));
-			i->name = g_strdup(name);
-			i->module = module;
-			g_hash_table_insert(runtime.imports, i->name, i);
-			PyObject *func = PyObject_GetAttrString(module, "new");
-			if( func != NULL )
-			{
-				PyObject *arglist = Py_BuildValue("()");
-				PyObject *r = PyEval_CallObject(func, arglist);
-				Py_DECREF(arglist);
-				Py_XDECREF(r);
-				Py_DECREF(func);
-			} else
-				PyErr_Clear();
-			traceback();
-			free(name);
+	gchar **module_names;
+	gchar **module_name;
+	module_names = g_key_file_get_string_list(g_dionaea->config, "module.python", "imports", &num, &error);
+	for (module_name = module_names; *module_name; module_name++) {
+		PyObject *module = PyImport_ImportModule(*module_name);
+		if( module == NULL ) {
+			PyErr_Print();
+			g_error("Import failed %s", *module_name);
 		}
+		Py_DECREF(module);
+		struct import *i = g_malloc0(sizeof(struct import));
+		i->name = g_strdup(*module_name);
+		i->module = module;
+		g_hash_table_insert(runtime.imports, i->name, i);
+		PyObject *func = PyObject_GetAttrString(module, "new");
+		if( func != NULL ) {
+			PyObject *arglist = Py_BuildValue("()");
+			PyObject *r = PyEval_CallObject(func, arglist);
+			Py_DECREF(arglist);
+			Py_XDECREF(r);
+			Py_DECREF(func);
+		} else {
+			PyErr_Clear();
+		}
+		traceback();
+		//free(name);
 	}
 
 	signal(SIGINT, SIG_DFL);
@@ -499,21 +474,20 @@ void log_wrap(char *name, int number, char *file, int line, char *msg)
 	if( x == -1 )
 		return;
 
-	if( number == 0 || number == 10 )
+	if( number == 0 || number == 10 ) {
 		log_level = G_LOG_LEVEL_DEBUG;
-	else
-	if( number == 20 )
+	} else if( number == 20 ) {
 		log_level = G_LOG_LEVEL_INFO;
-	else
-	if( number == 30 )
+	} else if( number == 30 ) {
 		log_level = G_LOG_LEVEL_WARNING;
-	else
-	if( number == 40 )
-		log_level = G_LOG_LEVEL_ERROR;
-	else
-	if( number == 50 )
+	} else if( number == 40 ) {
+		// in glib2 critical is a critical warning
 		log_level = G_LOG_LEVEL_CRITICAL;
-
+	} else if( number == 50 ) {
+		// in glib2 an error is critical and calls the abort function to
+		// terminate the program immediately
+		log_level = G_LOG_LEVEL_ERROR;
+	}
 	g_log(log_domain, log_level, "%s", msg);
 	free(log_domain);
 #endif
@@ -597,8 +571,8 @@ PyObject *pygetifaddrs(PyObject *self, PyObject *args)
 
 	char *old_ifa_name = "";
 	pyafdict = NULL;
-	for( iface=ifaces[0]; i < count; iface = ifaces[i], i++ )
-	{
+	for(i = 0; i < count; i++) {
+		iface = ifaces[i];
 		if( iface->ifa_addr == NULL )
 			continue;
 
@@ -721,9 +695,9 @@ PyObject *pygetifaddrs(PyObject *self, PyObject *args)
 }
 
 
+/*
 PyObject *pylcfgx_tree(struct lcfgx_tree_node *node)
 {
-	PyObject *obj = NULL;
 	if( node->type == lcfgx_map )
 	{
 		obj = PyDict_New();
@@ -752,10 +726,68 @@ PyObject *pylcfgx_tree(struct lcfgx_tree_node *node)
 	}
 	return obj; 
 }
+*/
 
-PyObject *pylcfg(PyObject *self, PyObject *args)
+PyObject *py_config_string(gchar *group, gchar *key)
 {
-	PyObject *obj = pylcfgx_tree(g_dionaea->config.root);
+	gchar *value;
+	GError *error = NULL;
+	PyObject *obj_value;
+
+	value = g_key_file_get_string(g_dionaea->config, group, key, &error);
+	obj_value = PyUnicode_FromString(value);
+
+	return obj_value;
+}
+
+PyObject *py_config_string_list(gchar *group, gchar *key)
+{
+	gchar **values, **value;
+	GError *error = NULL;
+	gsize num;
+	PyObject *obj_values, *obj_value;
+
+	values = g_key_file_get_string_list(g_dionaea->config, group, key, &num, &error);
+	g_clear_error(&error);
+	if (values == NULL) {
+		return Py_None;
+	}
+	obj_values = PyList_New(0);
+
+	for(value = values; *value; value++) {
+		obj_value = PyUnicode_FromString(*value);
+		PyList_Append(obj_values, obj_value);
+		Py_DECREF(obj_value);
+	}
+
+	return obj_values;
+}
+
+PyObject *py_config(PyObject *self, PyObject *args)
+{
+	PyObject *obj, *obj2, *obj_value = NULL;
+
+	obj = PyDict_New();
+	obj2 = PyDict_New();
+	obj_value = py_config_string("dionaea", "listen.mode");
+	PyDict_SetItemString(obj2, "listen.mode", obj_value);
+	obj_value = py_config_string_list("dionaea", "listen.interfaces");
+	PyDict_SetItemString(obj2, "listen.interfaces", obj_value);
+	obj_value = py_config_string_list("dionaea", "listen.adresses");
+	PyDict_SetItemString(obj2, "listen.addresses", obj_value);
+	obj_value = py_config_string("dionaea", "download.dir");
+	PyDict_SetItemString(obj2, "download.dir", obj_value);
+
+	PyDict_SetItemString(obj, "dionaea", obj2);
+
+	obj2 = PyDict_New();
+	obj_value = py_config_string_list("module.python", "ihandler_configs");
+	PyDict_SetItemString(obj2, "ihandler_configs", obj_value);
+	obj_value = py_config_string_list("module.python", "service_configs");
+	PyDict_SetItemString(obj2, "service_configs", obj_value);
+
+	PyDict_SetItemString(obj, "module", obj2);
+
 	return obj;
 }
 

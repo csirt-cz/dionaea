@@ -25,7 +25,12 @@
 #*
 #*******************************************************************************/
 
-import weakref 
+import logging
+import weakref
+
+
+logger = logging.getLogger("binding")
+logger.setLevel(logging.DEBUG)
 
 cdef extern from *:
 	ctypedef char* const_char_ptr "const char*"
@@ -38,7 +43,7 @@ cdef extern from "module.h":
 	ctypedef int c_uintptr_t "uintptr_t"
 	char * c_g_strdup "g_strdup" (char *)
 	cdef object c_pygetifaddrs "pygetifaddrs"(object self, object args)
-	cdef object c_pylcfg "pylcfg"(object self, object args)
+	cdef object c_py_config "py_config"(object self, object args)
 	cdef object c_version "pyversion"(object self, object args)
 	
 
@@ -51,7 +56,7 @@ cdef extern from "module.h":
 cdef class dionaea:
 	cdef c_dionaea *thisptr
 	def config(self):
-		return c_pylcfg(<object> None, <object> None)
+		return c_py_config(<object> None, <object> None)
 	def getifaddrs(self):
 		return c_pygetifaddrs(<object> None, <object> None)
 	def version(self):
@@ -455,7 +460,7 @@ cdef class connection:
 				raise ValueError(str(con_type) + u'is not a valid protocol')
 			self.thisptr = c_connection_new(enum_type)
 #			print(u"XXXXXXXXXXXXX" + self.__class__.__name__)
-			protoname = self.__class__.__name__
+			protoname = getattr(self, "protocol_name", self.__class__.__name__)
 			protoname = protoname.encode(u'ascii')
 			self.thisptr.protocol.name = c_g_strdup(protoname)
 			self.thisptr.protocol.ctx_new = <protocol_handler_ctx_new>c_traceable_ctx_new_cb
@@ -518,6 +523,23 @@ cdef class connection:
 	def __hash__(self):
 		return <long>self.thisptr
 
+	def apply_config(self, config):
+		"""
+		Apply config
+		"""
+		pass
+
+	def apply_parent_config(self, parent):
+		"""
+		Copy shared config values from the parent.
+		"""
+		value_names = getattr(parent, "shared_config_values", None)
+		if value_names is None:
+			# print("No shared config values found")
+			return
+		for name in value_names:
+			value = getattr(parent, name)
+			setattr(self, name, value)
 
 	def handle_established(self):
 		"""callback once the connection is established"""
@@ -733,6 +755,7 @@ cdef connection _factory(c_connection *con):
 	instance.thisptr = con
 	INIT_C_CONNECTION_CLASS(parent,instance)
 	c_connection_protocol_ctx_set(con, <void *>instance)
+	instance.apply_parent_config(parent)
 	return instance
 
 cdef void _garbage(void *context):
@@ -760,14 +783,23 @@ cdef int handle_io_in_cb(c_connection *con, void *context, void *data, int size)
 	cdef connection instance
 	instance = <connection>context
 	bdata = bytesfrom(<char *>data, size)
-	l = instance.handle_io_in(bdata)
+	try:
+		l = instance.handle_io_in(bdata)
+	except BaseException as e:
+		logging.error("There was an error in the Python service", exc_info=True)
+		instance.close()
+		return len(bdata)
 	return l
 	
 cdef void handle_io_out_cb(c_connection *con, void *context) except *:
 #	print "io_out_cb"
 	cdef connection instance
 	instance = <connection>context
-	instance.handle_io_out()
+	try:
+		instance.handle_io_out()
+	except BaseException as e:
+		logging.error("There was an error in the Python service", exc_info=True)
+		instance.close()
 	
 cdef c_bool handle_disconnect_cb(c_connection *con, void *context) except *:
 #	print "disconnect_cb"
@@ -934,6 +966,8 @@ cdef extern from "../../include/incident.h":
 	c_bool c_incident_value_int_get "incident_value_int_get" (c_incident *e, char *name, long int *val)
 	c_bool c_incident_value_con_set "incident_value_con_set" (c_incident *e, char *name, c_connection *val)
 	c_bool c_incident_value_con_get "incident_value_con_get" (c_incident *e, char *name, c_connection **val)
+	c_bool c_incident_value_bytes_set "incident_value_bytes_set" (c_incident *e, char *name, c_GString *str)
+	c_bool c_incident_value_bytes_get "incident_value_bytes_get" (c_incident *e, char *name, c_GString **str)
 	c_bool c_incident_value_string_set "incident_value_string_set" (c_incident *e, char *name, c_GString *str)
 	c_bool c_incident_value_string_get "incident_value_string_get" (c_incident *e, char *name, c_GString **str)
 	c_bool c_incident_value_list_set "incident_value_list_set" (c_incident *e, char *name, c_GList *val)
@@ -1096,10 +1130,10 @@ cdef class incident:
 			c_incident_value_con_set(self.thisptr, key, con.thisptr)
 		elif isinstance(value, int) :
 			c_incident_value_int_set(self.thisptr, key, value)
+		elif isinstance(value, bytes):
+			c_incident_value_bytes_set(self.thisptr, key, c_g_string_new(value))
 		elif isinstance(value, unicode):
 			value = value.encode(u'UTF-8')
-			c_incident_value_string_set(self.thisptr, key, c_g_string_new(value))
-		elif isinstance(value, bytes):
 			c_incident_value_string_set(self.thisptr, key, c_g_string_new(value))
 		elif isinstance(value, list):
 			c_incident_value_list_set(self.thisptr, key, py_to_glist(value))
@@ -1123,6 +1157,8 @@ cdef class incident:
 			c.thisptr = <c_connection *>cc
 			INIT_C_CONNECTION_CLASS(c, c)
 			return c
+		elif c_incident_value_bytes_get(self.thisptr, key, &s) == True:
+			return bytesfrom(s.str, s.len)
 		elif c_incident_value_string_get(self.thisptr, key, &s) == True:
 			return stringfrom(s.str, s.len)
 		elif c_incident_value_int_get(self.thisptr, key, &i) == True:
@@ -1181,7 +1217,10 @@ cdef void c_python_ihandler_cb (c_incident *i, void *ctx) except *:
 		handler.handle_incident(pi)
 		return
 
-	method(pi)
+	try:
+		method(pi)
+	except BaseException as e:
+		logging.error("There was an error while handling the incident", exc_info=True)
 	
 
 cdef class ihandler:
@@ -1192,6 +1231,12 @@ cdef class ihandler:
 
 	def __dealloc__(self):
 		c_ihandler_free(self.thisptr)
+
+	def apply_config(self, config):
+		"""
+		Apply config
+		"""
+		pass
 
 	def start(self):
 		pass

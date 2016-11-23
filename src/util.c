@@ -34,14 +34,12 @@
 #include <net/if.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <unistd.h>
 #include <errno.h>
 
 #include <glib.h>
-
-#include <lcfg/lcfg.h>
-#include <lcfgx/lcfgx_tree.h>
 
 
 #include "config.h"
@@ -249,13 +247,16 @@ struct tempfile *tempfile_new(char *path, char *prefix)
 
 struct tempfile *tempdownload_new(char *prefix)
 {
-	struct lcfgx_tree_node *node;
+	/* ToDo: replace 
+  struct lcfgx_tree_node *node;
 	if( lcfgx_get_string(g_dionaea->config.root, &node, "downloads.dir") != LCFGX_PATH_FOUND_TYPE_OK )
 	{
 		g_warning("missing downloads.dir in dionaea.conf");
 		return NULL;
 	}
 	return tempfile_new((char *)node->value.string.data, prefix);
+  */
+	return tempfile_new((char *)"/tmp", prefix);
 }
 
 void tempfile_close(struct tempfile *tf)
